@@ -2,4 +2,4 @@ User-agent: *
 Allow: /
 Disallow: /admin.html
 Disallow: /api/
-Sitemap: https://dany.style/sitemap.xml
+Sitemap: https://www.dany.style/sitemap.xml
