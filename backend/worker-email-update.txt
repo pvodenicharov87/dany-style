@@ -1,7 +1,7 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 // src/worker.js
-var TIMES = Array.from({ length: 8 }, (_, i) => String(i + 10).padStart(2, "0") + ":00");
+var TIMES = ["10:00","11:30","13:00","14:30","16:00","17:30"];
 var json =  __name((v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } }), "json");
 var err =  __name((message, status = 400) => json({ error: message }, status), "err");
 var safe =  __name((s, max = 2e3) => String(s ?? "").trim().slice(0, max), "safe");
@@ -81,6 +81,18 @@ async function sendMail(env, subject, body, clientEmail, attachments = []) {
   return results.every(Boolean) && clientSent;
 }
 __name(sendMail, "sendMail");
+
+const minutes = t => Number(t.slice(0,2))*60+Number(t.slice(3));
+const overlaps = (t, row) => {
+  const duration = TIMES.includes(row.time) ? 90 : 60;
+  return minutes(t) < minutes(row.time)+duration && minutes(row.time) < minutes(t)+90;
+};
+const expandSlots = rows => rows.flatMap(row => TIMES.filter(t => overlaps(t,row)).map(time => ({...row, sourceTime:row.time,time})));
+async function slotTaken(env,date,time) {
+  const rows = await env.DB.prepare("SELECT time FROM slots WHERE date=?").bind(date).all();
+  return rows.results.some(row => overlaps(time,row));
+}
+
 async function handle(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (!env.DB) return err("\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438", 503);
@@ -88,7 +100,7 @@ async function handle(request, env) {
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");
     if (!validDate(from) || !validDate(to) || from > to || Date.parse(to) - Date.parse(from) > 35 * 864e5) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u043F\u0435\u0440\u0438\u043E\u0434");
     const rows = await env.DB.prepare("SELECT date,time FROM slots WHERE date BETWEEN ? AND ?").bind(from, to).all();
-    return json({ occupied: rows.results });
+    return json({ occupied: expandSlots(rows.results).map(({date,time})=>({date,time})) });
   }
   if (method === "POST" && path === "/api/book") {
     const b = await request.json();
@@ -96,6 +108,7 @@ async function handle(request, env) {
     if (!future(date) || !validTime(time) || !name || !phone || !validEmail(email) || b.privacy !== true) return err("\u041F\u0440\u043E\u0432\u0435\u0440\u0435\u0442\u0435 \u043F\u043E\u043F\u044A\u043B\u043D\u0435\u043D\u0438\u0442\u0435 \u0434\u0430\u043D\u043D\u0438 \u0438 \u0441\u044A\u0433\u043B\u0430\u0441\u0438\u0435\u0442\u043E.");
     const id = crypto.randomUUID();
     try {
+      if (await slotTaken(env,date,time)) return err("Този час вече е зает. Моля, изберете друг.",409);
       await env.DB.prepare("INSERT INTO slots(date,time,kind,id,name,phone,email,service) VALUES(?,?,'booked',?,?,?,?,?)").bind(date, time, id, name, phone, email, service).run();
     } catch {
       return err("\u0422\u043E\u0437\u0438 \u0447\u0430\u0441 \u0432\u0435\u0447\u0435 \u0435 \u0437\u0430\u0435\u0442. \u041C\u043E\u043B\u044F, \u0438\u0437\u0431\u0435\u0440\u0435\u0442\u0435 \u0434\u0440\u0443\u0433.", 409);
@@ -153,7 +166,7 @@ async function handle(request, env) {
       const from = url.searchParams.get("from"), to = url.searchParams.get("to");
       if (!validDate(from) || !validDate(to) || from > to || Date.parse(to) - Date.parse(from) > 35 * 864e5) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u043F\u0435\u0440\u0438\u043E\u0434");
       const rows = await env.DB.prepare("SELECT date,time,kind,id,name,phone,email,service FROM slots WHERE date BETWEEN ? AND ? ORDER BY date,time").bind(from, to).all();
-      return json({ items: rows.results });
+      return json({ items: expandSlots(rows.results) });
     }
     if (method === "POST") {
       const b = await request.json(), date = safe(b.date, 10), time = safe(b.time, 5);
@@ -164,7 +177,7 @@ async function handle(request, env) {
       }
       if (!validDate(date)) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u043D\u0430 \u0434\u0430\u0442\u0430");
       if (path === "/api/admin/slot") {
-        if (!validTime(time)) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u0447\u0430\u0441");
+        if (!validTime(time) && !(b.action === "unblock" && /^(1[0-7]):00$/.test(time))) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u0447\u0430\u0441");
         if (b.action === "block") {
           await env.DB.prepare("INSERT OR IGNORE INTO slots(date,time,kind) VALUES(?,?,'blocked')").bind(date, time).run();
           return json({ ok: true });
@@ -188,6 +201,7 @@ async function handle(request, env) {
         const name = safe(b.name, 100), phone = safe(b.phone, 30), service = safe(b.service, 1e3);
         if (!validTime(time) || !name) return err("\u041B\u0438\u043F\u0441\u0432\u0430\u0442 \u0434\u0430\u043D\u043D\u0438");
         try {
+          if (await slotTaken(env,date,time)) return err("Този час вече е зает.",409);
           await env.DB.prepare("INSERT INTO slots(date,time,kind,id,name,phone,service) VALUES(?,?,'booked',?,?,?,?)").bind(date, time, crypto.randomUUID(), name, phone, service).run();
           return json({ ok: true });
         } catch {

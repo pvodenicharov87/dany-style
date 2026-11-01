@@ -262,7 +262,7 @@ h1,h2,h3,h4,h5,h6,.brand {font-weight:700 !important;letter-spacing:-.025em;}
 })();
 </script><script>
 (()=>{'use strict';
-const $=id=>document.getElementById(id),today=new Date(),state={year:today.getFullYear(),month:today.getMonth(),date:null,time:null},times=Array.from({length:8},(_,i)=>String(i+10).padStart(2,'0')+':00');
+const $=id=>document.getElementById(id),today=new Date(),state={year:today.getFullYear(),month:today.getMonth(),date:null,time:null},times=["10:00","11:30","13:00","14:30","16:00","17:30"];
 let occupied=new Set(),requestNumber=0,available=false;
 const iso=(y,m,d)=>`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
 const message=t=>{$('bk-status').textContent=t};
