@@ -6,14 +6,14 @@ const times=Array.from({length:15},(_,i)=>`${String(10+Math.floor(i/2)).padStart
 const services=[{id:'onycholysis',bg:'Онихолиза',en:'Onycholysis',durations:[30,60]},{id:'thickened',bg:'Удебелени нокти',en:'Thickened nails',durations:[40,80]},{id:'niti',bg:'NiTi',en:'NiTi',durations:[30]},{id:'gel-polish',bg:'Гел лак',en:'Gel polish',durations:[90]},{id:'natural-gel',bg:'Гел върху естествен нокът',en:'Gel on natural nails',durations:[150]},{id:'hyperkeratosis',bg:'Хиперкератоза',en:'Hyperkeratosis',durations:[30,60]},{id:'ingrown',bg:'Впит нокът',en:'Ingrown toenail',durations:[30,60]},{id:'fungal',bg:'Гъбични изменения',en:'Fungal changes',durations:[40,60]},{id:'extensions',bg:'Изграждане с гел',en:'Extensions',durations:[165]}];
 class Element{
  constructor(){this.children=[];this.options=[];this.style={};this.textContent='';this.disabled=false;this._value='';this.classList={add(){},remove(){}};this.button=null;this.dataset={};this.hidden=false}
- set value(x){this._value=String(x)}get value(){return this._value}replaceChildren(){this.children=[];this.options=[];this._value=''}append(...x){this.children.push(...x)}add(x){this.options.push(x);if(this.options.length===1)this.value=x.value}querySelector(){return this.button??=new Element()}scrollIntoView(){}reset(){}
+ set value(x){this._value=String(x)}get value(){return this._value}replaceChildren(){this.children=[];this.options=[];this._value=''}append(...x){this.children.push(...x)}add(x){this.options.push(x);if(this.options.length===1)this.value=x.value}querySelector(){return this.button??=new Element()}scrollIntoView(){}reset(){}showModal(){this.open=true}close(){this.open=false}
 }
-async function boot(path,version='service-duration-v1',occupiedTime='11:00'){
+async function boot(path,version='service-duration-v1',occupiedTime='11:00',cancelVersion=1){
  const map=new Map(),get=id=>{if(!map.has(id))map.set(id,new Element());return map.get(id)};get('blockLength').value='90';
  const document={getElementById:get,createElement:()=>new Element(),hidden:false,addEventListener(){}};
- const data={scheduleVersion:version,adminBlockMinutes:90,times,services,items:[{date,time:occupiedTime,kind:'booked',id:'one',name:'Example',duration_minutes:30}],occupied:[{date,time:occupiedTime}]};
+ const data={scheduleVersion:version,adminBlockMinutes:90,cancellationEmailVersion:cancelVersion,times,services,items:[{date,time:occupiedTime,kind:'booked',id:'one',name:'Example',duration_minutes:30}],occupied:[{date,time:occupiedTime}]};
  data.availability=times.map(time=>{const start=Number(time.slice(0,2))*60+Number(time.slice(3));return {date,time,services:services.map(s=>({id:s.id,quantities:s.durations.map((duration,i)=>({quantity:i+1,duration})).filter(q=>!(start<(Number(occupiedTime.slice(0,2))*60+Number(occupiedTime.slice(3))+30)&&(Number(occupiedTime.slice(0,2))*60+Number(occupiedTime.slice(3)))<start+q.duration))})).filter(s=>s.quantities.length)}});
- const calls=[];const fetch=async (url,options)=>{calls.push({url,options});const j=String(url).includes('/session')?{ok:true}:data;return {ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>j}};
+ const calls=[];const fetch=async (url,options)=>{calls.push({url,options});const j=String(url).includes('/session')?{ok:true}:String(url).endsWith('/api/admin/cancel')?{ok:true,cancelled:true,clientEmailStatus:data.cancelStatus||'sent'}:data;return {ok:true,status:200,headers:{get:()=> 'application/json'},json:async()=>j}};
  const context={document,fetch,Date,Intl,Map,Set,Array,Number,String,Error,console,Option:class{constructor(text,value){this.text=text;this.value=String(value)}},setInterval(){},window:{addEventListener(){}},confirm:()=>true,FormData:class{get(key){return {privacy:"yes",name:"Test",phone:"123",email:"",service:"Note"}[key]}},JSON};
  const html=readFileSync(new URL('../'+path,import.meta.url),'utf8');const scripts=[...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)].filter(m=>path==='admin.html'||m[2].includes('requestNumber=0'));
  for(const script of scripts)vm.runInNewContext(script[2],context);
@@ -59,3 +59,15 @@ for(const quantity of [1,2]){
  panel.get('client').value='Test';await panel.get('add').onsubmit({preventDefault(){}});const request=JSON.parse(panel.calls.find(c=>c.url.endsWith('/api/admin/book')).options.body);assert.equal(request.time,'11:30');assert.equal(request.serviceId,'hyperkeratosis');assert.equal(request.quantity,quantity);
 }
 console.log('PASS regression: grid click selects exact11:30 without manual block; hyperkeratosis1/2 ends12:00/12:30; prior free cells stay enabled.');
+
+for(const status of ['sent','failed','not_provided']){
+ const panel=await boot('admin.html');panel.data.cancelStatus=status;
+ await panel.get('calendar').children.find(x=>x.textContent===now.getDate()).onclick();const cancel=panel.get('items').children[0].children[0];cancel.onclick();
+ assert(panel.get('cancelDialog').open);assert(!panel.calls.some(x=>x.url.endsWith('/api/admin/cancel')));panel.get('cancelReason').value='Налага се промяна.';
+ await panel.get('cancelForm').onsubmit({preventDefault(){}});assert(!panel.get('cancelDialog').open);
+ const body=JSON.parse(panel.calls.find(x=>x.url.endsWith('/api/admin/cancel')).options.body);assert.equal(body.id,'one');assert.equal(body.reason,'Налага се промяна.');
+ assert(panel.get('msg').textContent.includes(status==='sent'?'изпратено':status==='failed'?'не е потвърдено':'Няма имейл'));
+}
+console.log('PASS: cancellation dialog requires confirmation, submits optional reason and displays separate sent/failed/no-email statuses.');
+
+const pendingWorker=await boot('admin.html','service-duration-v1','11:00',0);await pendingWorker.get('calendar').children.find(x=>x.textContent===now.getDate()).onclick();pendingWorker.get('items').children[0].children[0].onclick();assert(pendingWorker.get('confirmCancellation').disabled);await pendingWorker.get('cancelForm').onsubmit({preventDefault(){}});assert(!pendingWorker.calls.some(x=>x.url.endsWith('/api/admin/cancel')));pendingWorker.get('cancelBack').onclick();assert(!pendingWorker.get('cancelDialog').open);console.log('PASS: old Worker capability gate prevents unnotified cancellation; Back closes without deleting.');

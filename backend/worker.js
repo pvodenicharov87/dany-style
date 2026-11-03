@@ -34,35 +34,36 @@ async function verify(token, secret) {
   }
 }
 __name(verify, "verify");
-async function sendMail(env, subject, body, clientEmail, attachments = []) {
+async function sendMail(env, subject, body, clientEmail, attachments = [], cancellation = null) {
   if (!env.RESEND_API_KEY || !env.MAIL_FROM) return false;
   const recipients = [...new Set((env.NOTIFY_EMAILS || "").split(",").map(x => x.trim()).filter(Boolean))];
-  if (!recipients.length) return false;
+  if (!recipients.length && !cancellation) return false;
   const text = body.split("\n").filter(line => !/^Номер:/.test(line)).join("\n");
   const fields = {};
   for (const line of text.split("\n")) {
     const match = line.match(/^([^:]+):\s*(.*)$/);
     if (match) fields[match[1]] = match[2];
   }
-  const booking = subject.startsWith("Резервация");
+  const booking = subject.startsWith("Резервация") || Boolean(cancellation);
   const date = fields[booking ? "Дата" : "Предпочитана дата"] || "";
   const prettyDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date.split("-").reverse().join(".") : date;
-  const clientSubject = booking ? "Dany Style — потвърждение на Вашия час" : "Dany Style — получихме Вашата заявка";
+  const clientSubject = cancellation ? "Dany Style — отмяна на Вашия час" : booking ? "Dany Style — потвърждение на Вашия час" : "Dany Style — получихме Вашата заявка";
   const greeting = fields["Име"] ? "Здравейте, " + fields["Име"] + "," : "Здравейте,";
-  const intro = booking
+  const intro = cancellation ? "Уведомяваме Ви, че Вашата резервация в Dany Style е отменена." : booking
     ? "Благодарим Ви за доверието. Вашият час в Dany Style е запазен."
     : "Благодарим Ви за заявката за домашно посещение. Ще се свържа с Вас, за да уточним подробностите и да потвърдим удобен час. Това писмо не е потвърждение на резервация.";
   const rows = booking
     ? [["Дата", prettyDate], ["Час", fields["Час"]], ["Продължителност", fields["Продължителност"]], ["Услуга / бележка", fields["Услуга"]]]
     : [["Предпочитана дата", prettyDate], ["Адрес", fields["Адрес"]]];
   const details = rows.filter(([, value]) => value);
-  const closing = booking
+  const closing = cancellation ? "Моля, приемете извиненията ми за причиненото неудобство. Ще се радвам да изберете нов удобен час през сайта или да се свържете с мен на 0897 001 475." : booking
     ? "Очаквам Ви! Ако се налага промяна или отмяна на часа, моля свържете се с мен на 0897 001 475."
     : "Ако имате допълнителни въпроси, можете да се свържете с мен на 0897 001 475.";
+  const reason = cancellation ? (cancellation.reason || "За съжаление, поради непредвидени обстоятелства се налага да отменим Вашата резервация.") : "";
   const signature = "Поздрави,\nДаниела Ангелова\nПодолог | Dany Style";
-  const clientText = ["Dany Style", "", greeting, "", intro, "", ...details.map(([label,value]) => label + ": " + value), ...(booking ? ["Адрес: гр. Пловдив, ж.к. Тракия, ул. Съединение 45"] : []), "", closing, "", signature, "https://www.dany.style/"].join("\n");
+  const clientText = ["Dany Style", "", greeting, "", intro, "", ...details.map(([label,value]) => label + ": " + value), ...(booking ? ["Адрес: гр. Пловдив, ж.к. Тракия, ул. Съединение 45"] : []), ...(cancellation ? ["", reason] : []), "", closing, "", signature, "https://www.dany.style/"].join("\n");
   const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  const html = `<!doctype html><html lang="bg"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#fbf5f7;color:#493641;font-family:Arial,sans-serif"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fbf5f7"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%;max-width:560px;background:#ffffff;border:1px solid #eedde4;border-radius:16px"><tr><td style="padding:28px 24px 20px;border-bottom:1px solid #eedde4"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td><img src="https://www.dany.style/assets/home-0.png" width="72" height="72" alt="Лого Dany Style" style="display:block;width:72px;height:72px;border:0"></td><td style="padding-left:16px"><strong style="font-family:Georgia,serif;font-size:27px;color:#8b526c">Dany Style</strong><br><span style="font-size:13px;color:#77616d">Подологична грижа · Даниела Ангелова</span></td></tr></table></td></tr><tr><td style="padding:26px 24px;font-size:16px;line-height:1.65"><p style="margin:0 0 18px">${escape(greeting)}</p><p style="margin:0 0 22px">${escape(intro)}</p><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fcf4f7;border-radius:10px">${details.map(([label,value]) => `<tr><td style="padding:10px 14px;vertical-align:top;font-size:14px;color:#765368;width:34%">${escape(label)}</td><td style="padding:10px 14px;font-size:15px;overflow-wrap:anywhere">${escape(value)}</td></tr>`).join("")}</table>${booking ? '<p style="font-size:14px;color:#77616d;margin:18px 0">гр. Пловдив, ж.к. Тракия<br>ул. Съединение 45</p>' : ''}<p style="margin:22px 0">${escape(closing)}</p><p style="margin:0">Поздрави,<br><strong style="color:#8b526c">Даниела Ангелова</strong><br><span style="font-size:14px;color:#77616d">Подолог | Dany Style</span></p></td></tr><tr><td style="padding:18px 24px;border-top:1px solid #eedde4;font-size:13px;color:#77616d"><a href="tel:+359897001475" style="color:#8b526c">0897 001 475</a> &nbsp;·&nbsp; <a href="https://www.dany.style/" style="color:#8b526c">www.dany.style</a></td></tr></table></td></tr></table></body></html>`;
+  const html = `<!doctype html><html lang="bg"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#fbf5f7;color:#493641;font-family:Arial,sans-serif"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fbf5f7"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%;max-width:560px;background:#ffffff;border:1px solid #eedde4;border-radius:16px"><tr><td style="padding:28px 24px 20px;border-bottom:1px solid #eedde4"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td><img src="https://www.dany.style/assets/home-0.png" width="72" height="72" alt="Лого Dany Style" style="display:block;width:72px;height:72px;border:0"></td><td style="padding-left:16px"><strong style="font-family:Georgia,serif;font-size:27px;color:#8b526c">Dany Style</strong><br><span style="font-size:13px;color:#77616d">Подологична грижа · Даниела Ангелова</span></td></tr></table></td></tr><tr><td style="padding:26px 24px;font-size:16px;line-height:1.65"><p style="margin:0 0 18px">${escape(greeting)}</p><p style="margin:0 0 22px">${escape(intro)}</p><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fcf4f7;border-radius:10px">${details.map(([label,value]) => `<tr><td style="padding:10px 14px;vertical-align:top;font-size:14px;color:#765368;width:34%">${escape(label)}</td><td style="padding:10px 14px;font-size:15px;overflow-wrap:anywhere">${escape(value)}</td></tr>`).join("")}</table>${booking ? '<p style="font-size:14px;color:#77616d;margin:18px 0">гр. Пловдив, ж.к. Тракия<br>ул. Съединение 45</p>' : ''}${cancellation ? `<p style="margin:22px 0;white-space:pre-wrap;overflow-wrap:anywhere">${escape(reason)}</p>` : ""}<p style="margin:22px 0">${escape(closing)}</p>${cancellation ? '<p style="margin:22px 0"><a href="https://www.dany.style/#rezervacii" style="display:inline-block;background:#8b526c;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none">Изберете нов час</a></p>' : ""}<p style="margin:0">Поздрави,<br><strong style="color:#8b526c">Даниела Ангелова</strong><br><span style="font-size:14px;color:#77616d">Подолог | Dany Style</span></p></td></tr><tr><td style="padding:18px 24px;border-top:1px solid #eedde4;font-size:13px;color:#77616d"><a href="tel:+359897001475" style="color:#8b526c">0897 001 475</a> &nbsp;·&nbsp; <a href="https://www.dany.style/" style="color:#8b526c">www.dany.style</a></td></tr></table></td></tr></table></body></html>`;
   const send = async (to, sub, plain, files = [], markup) => {
     try {
       const payload = {from: env.MAIL_FROM, to: [to], subject: sub, text: plain};
@@ -80,7 +81,7 @@ async function sendMail(env, subject, body, clientEmail, attachments = []) {
       return false;
     }
   };
-  const results = await Promise.all(recipients.map(to => send(to, subject, text, attachments)));
+  const results = cancellation ? [] : await Promise.all(recipients.map(to => send(to, subject, text, attachments)));
   const clientSent = clientEmail ? await send(clientEmail, clientSubject, clientText, [], html) : true;
   return results.every(Boolean) && clientSent;
 }
@@ -89,7 +90,7 @@ __name(sendMail, "sendMail");
 const minutes = t => Number(t.slice(0,2))*60+Number(t.slice(3));
 const durationOf = row => Number(row.duration_minutes) > 0 ? Number(row.duration_minutes) : (row.kind === "booked" || LEGACY_TIMES.includes(row.time) ? 90 : 60);
 const overlaps = (time,row,duration=APPOINTMENT_MINUTES) => minutes(time) < minutes(row.time)+durationOf(row) && minutes(row.time) < minutes(time)+duration;
-const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90,services:SERVICES};
+const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90,services:SERVICES,cancellationEmailVersion:1};
 const expandSlots = rows => rows.flatMap(row => TIMES.filter(time=>overlaps(time,row,30)).map(time=>({date:row.date,time})));
 const schemaChecks = new WeakMap();
 async function ensureScheduleSchema(db) {
@@ -221,8 +222,19 @@ async function handle(request, env) {
       const b = await request.json(), date = safe(b.date, 10), time = safe(b.time, 5);
       if (path === "/api/admin/cancel") {
         if (!b.id) return err("\u041B\u0438\u043F\u0441\u0432\u0430 \u043D\u043E\u043C\u0435\u0440");
-        await env.DB.prepare("DELETE FROM slots WHERE id=? AND kind='booked'").bind(safe(b.id, 100)).run();
-        return json({ ok: true });
+        if (b.reason !== undefined && (typeof b.reason !== "string" || b.reason.length > 2000)) return err("Причината трябва да е текст до 2000 знака.");
+        const reason = safe(b.reason,2000);
+        // Delete and return the original booking in one atomic statement. A repeated
+        // or concurrent cancellation cannot delete a new booking or send twice.
+        const booking = await env.DB.prepare("DELETE FROM slots WHERE id=? AND kind='booked' RETURNING date,time,name,phone,email,service,duration_minutes").bind(safe(b.id,100)).first();
+        if (!booking) return err("Резервацията вече е отменена или не съществува.",404);
+        let clientEmailStatus = "not_provided";
+        if (booking.email) {
+          const sent = await sendMail(env,"Отменена резервация Dany Style — "+booking.date+" "+booking.time,
+            `Име: ${booking.name || ""}\nДата: ${booking.date}\nЧас: ${booking.time}\nПродължителност: ${durationOf(booking)} мин.\nУслуга: ${booking.service || ""}`,booking.email,[],{reason});
+          clientEmailStatus = sent ? "sent" : "failed";
+        }
+        return json({ ok: true, cancelled:true, clientEmailStatus });
       }
       if (!validDate(date)) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u043D\u0430 \u0434\u0430\u0442\u0430");
       if (path === "/api/admin/slot") {
