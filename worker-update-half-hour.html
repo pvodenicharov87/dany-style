@@ -1,8 +1,9 @@
-<!doctype html><html lang="bg"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Обновяване на календара – Dany Style</title><style>body{max-width:850px;margin:30px auto;padding:20px;font:18px/1.6 Arial,sans-serif;color:#49313d;background:#fff7fa}button,a{font:inherit}button{padding:14px 20px;border:0;border-radius:14px;background:#a45f7d;color:white;cursor:pointer}textarea{box-sizing:border-box;width:100%;height:240px;padding:14px;margin-top:20px;font:13px/1.45 monospace;border:1px solid #d6acbf;border-radius:12px}#status{padding:15px;border-radius:12px;background:white}a{color:#854765}</style></head><body><h1>Календар през 30 минути</h1><p>Всяка резервация и клик за блокиране в админа заема 90 минути. Последният начален час е 17:00.</p><ol><li>Натиснете „Копирай целия код“.</li><li>В <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener">Cloudflare</a> отворете Workers &amp; Pages → dany-style → Edit code.</li><li>Заменете целия код в worker.js с копирания и натиснете Deploy.</li><li>Върнете се тук и проверете активирането.</li></ol><button id="copy">Копирай целия код</button> <button id="check">Провери активирането</button><p id="status" role="status">Кодът е готов за копиране.</p><textarea id="code" readonly spellcheck="false" aria-label="Пълен код за Cloudflare Worker">var __defProp = Object.defineProperty;
+<!doctype html><html lang="bg"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Обновяване на календара – Dany Style</title><style>body{max-width:850px;margin:30px auto;padding:20px;font:18px/1.6 Arial,sans-serif;color:#49313d;background:#fff7fa}button,a{font:inherit}button{padding:14px 20px;border:0;border-radius:14px;background:#a45f7d;color:white;cursor:pointer}textarea{box-sizing:border-box;width:100%;height:240px;padding:14px;margin-top:20px;font:13px/1.45 monospace;border:1px solid #d6acbf;border-radius:12px}#status{padding:15px;border-radius:12px;background:white}a{color:#854765}</style></head><body><h1>Календар през 30 минути</h1><p>Резервациите заемат времето на избраната услуга. За ръчно блокиране админът избира продължителност. Последният начален час е 17:00.</p><ol><li>Натиснете „Копирай целия код“.</li><li>В <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener">Cloudflare</a> отворете Workers &amp; Pages → dany-style → Edit code.</li><li>Заменете целия код в worker.js с копирания и натиснете Deploy.</li><li>Върнете се тук и проверете активирането.</li></ol><button id="copy">Копирай целия код</button> <button id="check">Провери активирането</button><p id="status" role="status">Кодът е готов за копиране.</p><textarea id="code" readonly spellcheck="false" aria-label="Пълен код за Cloudflare Worker">var __defProp = Object.defineProperty;
 var __name = (target, value) =&gt; __defProp(target, &quot;name&quot;, { value, configurable: true });
 // src/worker.js
 var TIMES = Array.from({length:15},(_,i)=&gt;{const m=600+i*30;return String(Math.floor(m/60)).padStart(2,&quot;0&quot;)+&quot;:&quot;+String(m%60).padStart(2,&quot;0&quot;)});
-const SCHEDULE_VERSION = &quot;half-hour-90-v1&quot;;
+const SCHEDULE_VERSION = &quot;service-duration-v1&quot;;
+const SERVICES = [{&quot;id&quot;: &quot;ingrown&quot;, &quot;bg&quot;: &quot;Впит нокът&quot;, &quot;en&quot;: &quot;Ingrown toenail&quot;, &quot;durations&quot;: [30, 60]}, {&quot;id&quot;: &quot;onycholysis&quot;, &quot;bg&quot;: &quot;Онихолиза&quot;, &quot;en&quot;: &quot;Onycholysis&quot;, &quot;durations&quot;: [30, 60]}, {&quot;id&quot;: &quot;thickened&quot;, &quot;bg&quot;: &quot;Удебелени и деформирани нокти&quot;, &quot;en&quot;: &quot;Thickened and deformed nails&quot;, &quot;durations&quot;: [40, 80]}, {&quot;id&quot;: &quot;fungal&quot;, &quot;bg&quot;: &quot;Гъбични изменения по ноктите&quot;, &quot;en&quot;: &quot;Fungal nail changes&quot;, &quot;durations&quot;: [40, 60]}, {&quot;id&quot;: &quot;hyperkeratosis&quot;, &quot;bg&quot;: &quot;Хиперкератоза&quot;, &quot;en&quot;: &quot;Hyperkeratosis&quot;, &quot;durations&quot;: [30, 60]}, {&quot;id&quot;: &quot;niti&quot;, &quot;bg&quot;: &quot;Корекция с NiTi&quot;, &quot;en&quot;: &quot;NiTi nail correction&quot;, &quot;durations&quot;: [30]}, {&quot;id&quot;: &quot;gel-polish&quot;, &quot;bg&quot;: &quot;Гел лак&quot;, &quot;en&quot;: &quot;Gel polish&quot;, &quot;durations&quot;: [90]}, {&quot;id&quot;: &quot;natural-gel&quot;, &quot;bg&quot;: &quot;Гел върху естествен нокът&quot;, &quot;en&quot;: &quot;Gel on natural nails&quot;, &quot;durations&quot;: [150]}, {&quot;id&quot;: &quot;extensions&quot;, &quot;bg&quot;: &quot;Изграждане с гел&quot;, &quot;en&quot;: &quot;Gel nail extensions&quot;, &quot;durations&quot;: [165]}];
 const LEGACY_TIMES = [&quot;10:00&quot;,&quot;11:30&quot;,&quot;13:00&quot;,&quot;14:30&quot;,&quot;16:00&quot;,&quot;17:30&quot;];
 const APPOINTMENT_MINUTES = 90;
 var json =  __name((v, status = 200) =&gt; new Response(JSON.stringify(v), { status, headers: { &quot;content-type&quot;: &quot;application/json; charset=utf-8&quot;, &quot;cache-control&quot;: &quot;no-store&quot;, &quot;x-content-type-options&quot;: &quot;nosniff&quot; } }), &quot;json&quot;);
@@ -52,7 +53,7 @@ async function sendMail(env, subject, body, clientEmail, attachments = []) {
     ? &quot;Благодарим Ви за доверието. Вашият час в Dany Style е запазен.&quot;
     : &quot;Благодарим Ви за заявката за домашно посещение. Ще се свържа с Вас, за да уточним подробностите и да потвърдим удобен час. Това писмо не е потвърждение на резервация.&quot;;
   const rows = booking
-    ? [[&quot;Дата&quot;, prettyDate], [&quot;Час&quot;, fields[&quot;Час&quot;]], [&quot;Услуга / бележка&quot;, fields[&quot;Услуга&quot;]]]
+    ? [[&quot;Дата&quot;, prettyDate], [&quot;Час&quot;, fields[&quot;Час&quot;]], [&quot;Продължителност&quot;, fields[&quot;Продължителност&quot;]], [&quot;Услуга / бележка&quot;, fields[&quot;Услуга&quot;]]]
     : [[&quot;Предпочитана дата&quot;, prettyDate], [&quot;Адрес&quot;, fields[&quot;Адрес&quot;]]];
   const details = rows.filter(([, value]) =&gt; value);
   const closing = booking
@@ -88,8 +89,8 @@ __name(sendMail, &quot;sendMail&quot;);
 const minutes = t =&gt; Number(t.slice(0,2))*60+Number(t.slice(3));
 const durationOf = row =&gt; Number(row.duration_minutes) &gt; 0 ? Number(row.duration_minutes) : (row.kind === &quot;booked&quot; || LEGACY_TIMES.includes(row.time) ? 90 : 60);
 const overlaps = (time,row,duration=APPOINTMENT_MINUTES) =&gt; minutes(time) &lt; minutes(row.time)+durationOf(row) &amp;&amp; minutes(row.time) &lt; minutes(time)+duration;
-const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90};
-const expandSlots = rows =&gt; rows.flatMap(row =&gt; TIMES.filter(time=&gt;overlaps(time,row)).map(time=&gt;({date:row.date,time})));
+const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90,services:SERVICES};
+const expandSlots = rows =&gt; rows.flatMap(row =&gt; TIMES.filter(time=&gt;overlaps(time,row,30)).map(time=&gt;({date:row.date,time})));
 const schemaChecks = new WeakMap();
 async function ensureScheduleSchema(db) {
   if (!schemaChecks.has(db)) schemaChecks.set(db,(async()=&gt;{
@@ -110,9 +111,25 @@ const SQL_MINUTES = &quot;(CAST(substr(time,1,2) AS INTEGER)*60+CAST(substr(time
 const SQL_DURATION = &quot;COALESCE(duration_minutes,CASE WHEN kind=&#x27;booked&#x27; OR time IN (&#x27;10:00&#x27;,&#x27;11:30&#x27;,&#x27;13:00&#x27;,&#x27;14:30&#x27;,&#x27;16:00&#x27;,&#x27;17:30&#x27;) THEN 90 ELSE 60 END)&quot;;
 const CONFLICT_SQL = `SELECT 1 FROM slots WHERE date=? AND ${SQL_MINUTES}&lt;? AND ${SQL_MINUTES}+${SQL_DURATION}&gt;?`;
 async function insertBooking(env,date,time,booking) {
-  const result=await env.DB.prepare(`INSERT INTO slots(date,time,kind,id,name,phone,email,service,duration_minutes) SELECT ?,?,&#x27;booked&#x27;,?,?,?,?,?,90 WHERE NOT EXISTS (${CONFLICT_SQL})`)
-    .bind(date,time,booking.id,booking.name,booking.phone||&quot;&quot;,booking.email||&quot;&quot;,booking.service||&quot;&quot;,date,minutes(time)+90,minutes(time)).run();
+  const result=await env.DB.prepare(`INSERT INTO slots(date,time,kind,id,name,phone,email,service,duration_minutes) SELECT ?,?,&#x27;booked&#x27;,?,?,?,?,?,? WHERE NOT EXISTS (${CONFLICT_SQL})`)
+    .bind(date,time,booking.id,booking.name,booking.phone||&quot;&quot;,booking.email||&quot;&quot;,booking.service||&quot;&quot;,booking.duration||90,date,minutes(time)+(booking.duration||90),minutes(time)).run();
   return result.meta.changes === 1;
+}
+function selection(b) {
+  if (!b.serviceId) {
+    if (b.quantity !== undefined || b.duration_minutes !== undefined) return null;
+    return {service:safe(b.service,1000),duration:90};
+  }
+  const item=SERVICES.find(s=&gt;s.id===b.serviceId), quantity=Number(b.quantity ?? 1);
+  if (!item || !Number.isInteger(quantity) || quantity&lt;1 || quantity&gt;item.durations.length) return null;
+  return {service:item.bg+(item.durations.length&gt;1?` — ${quantity} бр.`:&quot;&quot;)+(safe(b.notes,700)?&quot; • &quot;+safe(b.notes,700):&quot;&quot;),duration:item.durations[quantity-1]};
+}
+function publicAvailability(rows,from,to) {
+  const out=[];
+  for(let date=from;date&lt;=to;date=new Date(Date.parse(date+&quot;T12:00:00Z&quot;)+86400000).toISOString().slice(0,10)) {
+    for(const time of TIMES) out.push({date,time,services:SERVICES.map(s=&gt;({id:s.id,quantities:s.durations.map((duration,i)=&gt;({quantity:i+1,duration})).filter(q=&gt;!rows.some(x=&gt;x.date===date&amp;&amp;overlaps(time,x,q.duration)))})).filter(s=&gt;s.quantities.length)});
+  }
+  return out;
 }
 function blockStatement(db,date,time,duration=30) {
   return db.prepare(`INSERT INTO slots(date,time,kind,duration_minutes) SELECT ?,?,&#x27;blocked&#x27;,? WHERE NOT EXISTS (${CONFLICT_SQL})`)
@@ -128,16 +145,18 @@ async function handle(request, env) {
     const from = url.searchParams.get(&quot;from&quot;), to = url.searchParams.get(&quot;to&quot;);
     if (!validDate(from) || !validDate(to) || from &gt; to || Date.parse(to) - Date.parse(from) &gt; 35 * 864e5) return err(&quot;\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u043F\u0435\u0440\u0438\u043E\u0434&quot;);
     const rows = await env.DB.prepare(&quot;SELECT date,time,kind,duration_minutes FROM slots WHERE date BETWEEN ? AND ?&quot;).bind(from, to).all();
-    return json({ ...scheduleInfo, occupied: expandSlots(rows.results) });
+    return json({ ...scheduleInfo, occupied: expandSlots(rows.results), availability:publicAvailability(rows.results,from,to) });
   }
   if (method === &quot;POST&quot; &amp;&amp; path === &quot;/api/book&quot;) {
     const b = await request.json();
     const date = safe(b.date, 10), time = safe(b.time, 5), name = safe(b.name, 100), phone = safe(b.phone, 30), email = safe(b.email, 160), service = safe(b.service, 1e3);
     if (!future(date) || !validTime(time) || !name || !phone || !validEmail(email) || b.privacy !== true) return err(&quot;\u041F\u0440\u043E\u0432\u0435\u0440\u0435\u0442\u0435 \u043F\u043E\u043F\u044A\u043B\u043D\u0435\u043D\u0438\u0442\u0435 \u0434\u0430\u043D\u043D\u0438 \u0438 \u0441\u044A\u0433\u043B\u0430\u0441\u0438\u0435\u0442\u043E.&quot;);
+    const selected=selection(b);
+    if(!selected)return err(&quot;Изберете валидна услуга и брой.&quot;);
     const id = crypto.randomUUID();
     try {
       await ensureScheduleSchema(env.DB);
-      if (!await insertBooking(env,date,time,{id,name,phone,email,service})) return err(&quot;Този час вече е зает. Моля, изберете друг.&quot;,409);
+      if (!await insertBooking(env,date,time,{id,name,phone,email,...selected})) return err(&quot;Този час вече е зает. Моля, изберете друг.&quot;,409);
     } catch {
       return err(&quot;\u0422\u043E\u0437\u0438 \u0447\u0430\u0441 \u0432\u0435\u0447\u0435 \u0435 \u0437\u0430\u0435\u0442. \u041C\u043E\u043B\u044F, \u0438\u0437\u0431\u0435\u0440\u0435\u0442\u0435 \u0434\u0440\u0443\u0433.&quot;, 409);
     }
@@ -147,7 +166,8 @@ async function handle(request, env) {
 \u0418\u043C\u0435\u0439\u043B: ${email}
 \u0414\u0430\u0442\u0430: ${date}
 \u0427\u0430\u0441: ${time}
-\u0423\u0441\u043B\u0443\u0433\u0430: ${service}`, email);
+\u0423\u0441\u043B\u0443\u0433\u0430: ${selected.service}
+Продължителност: ${selected.duration} мин.`, email);
     return json({ id, emailSent: sent }, 201);
   }
   if (method === &quot;POST&quot; &amp;&amp; path === &quot;/api/home-request&quot;) {
@@ -208,7 +228,9 @@ async function handle(request, env) {
       if (path === &quot;/api/admin/slot&quot;) {
         if (!validTime(time) &amp;&amp; !(b.action === &quot;unblock&quot; &amp;&amp; /^1[0-8]:[03]0$/.test(time))) return err(&quot;\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u0447\u0430\u0441&quot;);
         if (b.action === &quot;block&quot;) {
-          const result = await blockStatement(env.DB,date,time,APPOINTMENT_MINUTES).run();
+          const duration=Number(b.duration_minutes ?? 90);
+          if(![30,40,60,80,90,120,150,165,180].includes(duration))return err(&quot;Невалидна продължителност.&quot;);
+          const result = await blockStatement(env.DB,date,time,duration).run();
           if (!result.meta.changes) return err(&quot;Периодът вече е зает. Обновете календара.&quot;,409);
           return json({ ok: true });
         }
@@ -229,9 +251,11 @@ async function handle(request, env) {
       }
       if (path === &quot;/api/admin/book&quot;) {
         const name = safe(b.name, 100), phone = safe(b.phone, 30), service = safe(b.service, 1e3);
+        const selected=selection(b);
+        if(!selected)return err(&quot;Изберете валидна услуга и брой.&quot;);
         if (!validTime(time) || !name) return err(&quot;\u041B\u0438\u043F\u0441\u0432\u0430\u0442 \u0434\u0430\u043D\u043D\u0438&quot;);
         try {
-          if (!await insertBooking(env,date,time,{id:crypto.randomUUID(),name,phone,service})) return err(&quot;Този час вече е зает.&quot;,409);
+          if (!await insertBooking(env,date,time,{id:crypto.randomUUID(),name,phone,...selected})) return err(&quot;Този час вече е зает.&quot;,409);
           return json({ ok: true });
         } catch {
           return err(&quot;\u0427\u0430\u0441\u044A\u0442 \u0435 \u0437\u0430\u0435\u0442&quot;, 409);
@@ -288,4 +312,4 @@ export default {
   }
 };
 
-</textarea><p><a href="https://www.dany.style/preview-mobile-seo.html">Клиентски календар</a> · <a href="https://www.dany.style/preview-mobile-admin-seo.html">Админ панел</a></p><script>const box=document.getElementById('code'),status=document.getElementById('status');document.getElementById('copy').onclick=async()=>{try{await navigator.clipboard.writeText(box.value);status.textContent='Целият код е копиран. Поставете го в Cloudflare и натиснете Deploy.'}catch{box.focus();box.select();status.textContent=document.execCommand('copy')?'Кодът е копиран.':'Кодът е избран. Копирайте го от менюто.'}};document.getElementById('check').onclick=async()=>{status.textContent='Проверка…';try{const date=new Date().toISOString().slice(0,10),r=await fetch('https://dany-style.danystyle.workers.dev/api/calendar?from='+date+'&to='+date),j=await r.json();if(!r.ok)throw Error(j.error||'Грешка при проверка');status.textContent=j.scheduleVersion==='half-hour-90-v1'&&j.adminBlockMinutes===90?'✓ Активирано: часове през 30 минути; резервациите и блокирането от админа са за 90 минути. Обновете сайта и админ панела.':'Все още работи предишната версия. Поставете новия код в Cloudflare и натиснете Deploy.'}catch(e){status.textContent='Проверката не завърши: '+e.message}};</script></body></html>
+</textarea><p><a href="https://www.dany.style/preview-mobile-seo.html">Клиентски календар</a> · <a href="https://www.dany.style/preview-mobile-admin-seo.html">Админ панел</a></p><script>const box=document.getElementById('code'),status=document.getElementById('status');document.getElementById('copy').onclick=async()=>{try{await navigator.clipboard.writeText(box.value);status.textContent='Целият код е копиран. Поставете го в Cloudflare и натиснете Deploy.'}catch{box.focus();box.select();status.textContent=document.execCommand('copy')?'Кодът е копиран.':'Кодът е избран. Копирайте го от менюто.'}};document.getElementById('check').onclick=async()=>{status.textContent='Проверка…';try{const date=new Date().toISOString().slice(0,10),r=await fetch('https://dany-style.danystyle.workers.dev/api/calendar?from='+date+'&to='+date),j=await r.json();if(!r.ok)throw Error(j.error||'Грешка при проверка');status.textContent=j.scheduleVersion==='service-duration-v1'&&j.adminBlockMinutes===90?'✓ Активирано: часове през 30 минути; продължителност според услугата и избрания брой. Обновете сайта и админ панела.':'Все още работи предишната версия. Поставете новия код в Cloudflare и натиснете Deploy.'}catch(e){status.textContent='Проверката не завърши: '+e.message}};</script></body></html>

@@ -2,7 +2,8 @@ var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 // src/worker.js
 var TIMES = Array.from({length:15},(_,i)=>{const m=600+i*30;return String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0")});
-const SCHEDULE_VERSION = "half-hour-90-v1";
+const SCHEDULE_VERSION = "service-duration-v1";
+const SERVICES = [{"id": "ingrown", "bg": "Впит нокът", "en": "Ingrown toenail", "durations": [30, 60]}, {"id": "onycholysis", "bg": "Онихолиза", "en": "Onycholysis", "durations": [30, 60]}, {"id": "thickened", "bg": "Удебелени и деформирани нокти", "en": "Thickened and deformed nails", "durations": [40, 80]}, {"id": "fungal", "bg": "Гъбични изменения по ноктите", "en": "Fungal nail changes", "durations": [40, 60]}, {"id": "hyperkeratosis", "bg": "Хиперкератоза", "en": "Hyperkeratosis", "durations": [30, 60]}, {"id": "niti", "bg": "Корекция с NiTi", "en": "NiTi nail correction", "durations": [30]}, {"id": "gel-polish", "bg": "Гел лак", "en": "Gel polish", "durations": [90]}, {"id": "natural-gel", "bg": "Гел върху естествен нокът", "en": "Gel on natural nails", "durations": [150]}, {"id": "extensions", "bg": "Изграждане с гел", "en": "Gel nail extensions", "durations": [165]}];
 const LEGACY_TIMES = ["10:00","11:30","13:00","14:30","16:00","17:30"];
 const APPOINTMENT_MINUTES = 90;
 var json =  __name((v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } }), "json");
@@ -52,7 +53,7 @@ async function sendMail(env, subject, body, clientEmail, attachments = []) {
     ? "Благодарим Ви за доверието. Вашият час в Dany Style е запазен."
     : "Благодарим Ви за заявката за домашно посещение. Ще се свържа с Вас, за да уточним подробностите и да потвърдим удобен час. Това писмо не е потвърждение на резервация.";
   const rows = booking
-    ? [["Дата", prettyDate], ["Час", fields["Час"]], ["Услуга / бележка", fields["Услуга"]]]
+    ? [["Дата", prettyDate], ["Час", fields["Час"]], ["Продължителност", fields["Продължителност"]], ["Услуга / бележка", fields["Услуга"]]]
     : [["Предпочитана дата", prettyDate], ["Адрес", fields["Адрес"]]];
   const details = rows.filter(([, value]) => value);
   const closing = booking
@@ -88,8 +89,8 @@ __name(sendMail, "sendMail");
 const minutes = t => Number(t.slice(0,2))*60+Number(t.slice(3));
 const durationOf = row => Number(row.duration_minutes) > 0 ? Number(row.duration_minutes) : (row.kind === "booked" || LEGACY_TIMES.includes(row.time) ? 90 : 60);
 const overlaps = (time,row,duration=APPOINTMENT_MINUTES) => minutes(time) < minutes(row.time)+durationOf(row) && minutes(row.time) < minutes(time)+duration;
-const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90};
-const expandSlots = rows => rows.flatMap(row => TIMES.filter(time=>overlaps(time,row)).map(time=>({date:row.date,time})));
+const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90,services:SERVICES};
+const expandSlots = rows => rows.flatMap(row => TIMES.filter(time=>overlaps(time,row,30)).map(time=>({date:row.date,time})));
 const schemaChecks = new WeakMap();
 async function ensureScheduleSchema(db) {
   if (!schemaChecks.has(db)) schemaChecks.set(db,(async()=>{
@@ -110,9 +111,25 @@ const SQL_MINUTES = "(CAST(substr(time,1,2) AS INTEGER)*60+CAST(substr(time,4,2)
 const SQL_DURATION = "COALESCE(duration_minutes,CASE WHEN kind='booked' OR time IN ('10:00','11:30','13:00','14:30','16:00','17:30') THEN 90 ELSE 60 END)";
 const CONFLICT_SQL = `SELECT 1 FROM slots WHERE date=? AND ${SQL_MINUTES}<? AND ${SQL_MINUTES}+${SQL_DURATION}>?`;
 async function insertBooking(env,date,time,booking) {
-  const result=await env.DB.prepare(`INSERT INTO slots(date,time,kind,id,name,phone,email,service,duration_minutes) SELECT ?,?,'booked',?,?,?,?,?,90 WHERE NOT EXISTS (${CONFLICT_SQL})`)
-    .bind(date,time,booking.id,booking.name,booking.phone||"",booking.email||"",booking.service||"",date,minutes(time)+90,minutes(time)).run();
+  const result=await env.DB.prepare(`INSERT INTO slots(date,time,kind,id,name,phone,email,service,duration_minutes) SELECT ?,?,'booked',?,?,?,?,?,? WHERE NOT EXISTS (${CONFLICT_SQL})`)
+    .bind(date,time,booking.id,booking.name,booking.phone||"",booking.email||"",booking.service||"",booking.duration||90,date,minutes(time)+(booking.duration||90),minutes(time)).run();
   return result.meta.changes === 1;
+}
+function selection(b) {
+  if (!b.serviceId) {
+    if (b.quantity !== undefined || b.duration_minutes !== undefined) return null;
+    return {service:safe(b.service,1000),duration:90};
+  }
+  const item=SERVICES.find(s=>s.id===b.serviceId), quantity=Number(b.quantity ?? 1);
+  if (!item || !Number.isInteger(quantity) || quantity<1 || quantity>item.durations.length) return null;
+  return {service:item.bg+(item.durations.length>1?` — ${quantity} бр.`:"")+(safe(b.notes,700)?" • "+safe(b.notes,700):""),duration:item.durations[quantity-1]};
+}
+function publicAvailability(rows,from,to) {
+  const out=[];
+  for(let date=from;date<=to;date=new Date(Date.parse(date+"T12:00:00Z")+86400000).toISOString().slice(0,10)) {
+    for(const time of TIMES) out.push({date,time,services:SERVICES.map(s=>({id:s.id,quantities:s.durations.map((duration,i)=>({quantity:i+1,duration})).filter(q=>!rows.some(x=>x.date===date&&overlaps(time,x,q.duration)))})).filter(s=>s.quantities.length)});
+  }
+  return out;
 }
 function blockStatement(db,date,time,duration=30) {
   return db.prepare(`INSERT INTO slots(date,time,kind,duration_minutes) SELECT ?,?,'blocked',? WHERE NOT EXISTS (${CONFLICT_SQL})`)
@@ -128,16 +145,18 @@ async function handle(request, env) {
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");
     if (!validDate(from) || !validDate(to) || from > to || Date.parse(to) - Date.parse(from) > 35 * 864e5) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u043F\u0435\u0440\u0438\u043E\u0434");
     const rows = await env.DB.prepare("SELECT date,time,kind,duration_minutes FROM slots WHERE date BETWEEN ? AND ?").bind(from, to).all();
-    return json({ ...scheduleInfo, occupied: expandSlots(rows.results) });
+    return json({ ...scheduleInfo, occupied: expandSlots(rows.results), availability:publicAvailability(rows.results,from,to) });
   }
   if (method === "POST" && path === "/api/book") {
     const b = await request.json();
     const date = safe(b.date, 10), time = safe(b.time, 5), name = safe(b.name, 100), phone = safe(b.phone, 30), email = safe(b.email, 160), service = safe(b.service, 1e3);
     if (!future(date) || !validTime(time) || !name || !phone || !validEmail(email) || b.privacy !== true) return err("\u041F\u0440\u043E\u0432\u0435\u0440\u0435\u0442\u0435 \u043F\u043E\u043F\u044A\u043B\u043D\u0435\u043D\u0438\u0442\u0435 \u0434\u0430\u043D\u043D\u0438 \u0438 \u0441\u044A\u0433\u043B\u0430\u0441\u0438\u0435\u0442\u043E.");
+    const selected=selection(b);
+    if(!selected)return err("Изберете валидна услуга и брой.");
     const id = crypto.randomUUID();
     try {
       await ensureScheduleSchema(env.DB);
-      if (!await insertBooking(env,date,time,{id,name,phone,email,service})) return err("Този час вече е зает. Моля, изберете друг.",409);
+      if (!await insertBooking(env,date,time,{id,name,phone,email,...selected})) return err("Този час вече е зает. Моля, изберете друг.",409);
     } catch {
       return err("\u0422\u043E\u0437\u0438 \u0447\u0430\u0441 \u0432\u0435\u0447\u0435 \u0435 \u0437\u0430\u0435\u0442. \u041C\u043E\u043B\u044F, \u0438\u0437\u0431\u0435\u0440\u0435\u0442\u0435 \u0434\u0440\u0443\u0433.", 409);
     }
@@ -147,7 +166,8 @@ async function handle(request, env) {
 \u0418\u043C\u0435\u0439\u043B: ${email}
 \u0414\u0430\u0442\u0430: ${date}
 \u0427\u0430\u0441: ${time}
-\u0423\u0441\u043B\u0443\u0433\u0430: ${service}`, email);
+\u0423\u0441\u043B\u0443\u0433\u0430: ${selected.service}
+Продължителност: ${selected.duration} мин.`, email);
     return json({ id, emailSent: sent }, 201);
   }
   if (method === "POST" && path === "/api/home-request") {
@@ -208,7 +228,9 @@ async function handle(request, env) {
       if (path === "/api/admin/slot") {
         if (!validTime(time) && !(b.action === "unblock" && /^1[0-8]:[03]0$/.test(time))) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u0447\u0430\u0441");
         if (b.action === "block") {
-          const result = await blockStatement(env.DB,date,time,APPOINTMENT_MINUTES).run();
+          const duration=Number(b.duration_minutes ?? 90);
+          if(![30,40,60,80,90,120,150,165,180].includes(duration))return err("Невалидна продължителност.");
+          const result = await blockStatement(env.DB,date,time,duration).run();
           if (!result.meta.changes) return err("Периодът вече е зает. Обновете календара.",409);
           return json({ ok: true });
         }
@@ -229,9 +251,11 @@ async function handle(request, env) {
       }
       if (path === "/api/admin/book") {
         const name = safe(b.name, 100), phone = safe(b.phone, 30), service = safe(b.service, 1e3);
+        const selected=selection(b);
+        if(!selected)return err("Изберете валидна услуга и брой.");
         if (!validTime(time) || !name) return err("\u041B\u0438\u043F\u0441\u0432\u0430\u0442 \u0434\u0430\u043D\u043D\u0438");
         try {
-          if (!await insertBooking(env,date,time,{id:crypto.randomUUID(),name,phone,service})) return err("Този час вече е зает.",409);
+          if (!await insertBooking(env,date,time,{id:crypto.randomUUID(),name,phone,...selected})) return err("Този час вече е зает.",409);
           return json({ ok: true });
         } catch {
           return err("\u0427\u0430\u0441\u044A\u0442 \u0435 \u0437\u0430\u0435\u0442", 409);

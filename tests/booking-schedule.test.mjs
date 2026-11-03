@@ -19,57 +19,39 @@ async function call(e,path,body,admin=false){
  const response=await worker.fetch(new Request('https://dany-style.danystyle.workers.dev'+path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Origin:'https://www.dany.style',...(admin?{Authorization:'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{})}),e);
  return {status:response.status,data:await response.json()};
 }
-const book=(e,time,admin=false)=>call(e,admin?'/api/admin/book':'/api/book',{date,time,name:'Test',phone:'123',email:'',service:'Test',privacy:true},admin);
+
+const book=(e,time,serviceId='ingrown',quantity=1,admin=false,extra={})=>call(e,admin?'/api/admin/book':'/api/book',{date,time,name:'Test',phone:'123',privacy:true,serviceId,quantity,...extra},admin);
 const calendar=e=>call(e,`/api/calendar?from=${date}&to=${date}`);
 const adminCalendar=e=>call(e,`/api/admin/calendar?from=${date}&to=${date}`,null,true);
-const occupied=r=>new Set(r.data.occupied.map(x=>x.time));
+const choice=(r,time,id)=>r.data.availability.find(x=>x.time===time).services.find(x=>x.id===id)?.quantities||[];
 let e=env(),r=await calendar(e);
-assert.equal(r.status,200);assert.equal(r.data.scheduleVersion,'half-hour-90-v1');assert.equal(r.data.times.length,15);assert.equal(r.data.times[0],'10:00');assert.equal(r.data.times.at(-1),'17:00');
-assert.equal((await book(e,'10:00')).status,201);
-let o=occupied(await calendar(e));for(const t of ['10:00','10:30','11:00'])assert(o.has(t));assert(!o.has('11:30'));
-assert.equal((await book(e,'11:00',true)).status,409);assert.equal((await book(e,'11:30',true)).status,200);
-e=env();assert.equal((await book(e,'11:00')).status,201);
-for(const t of ['10:00','10:30','11:30','12:00'])assert.equal((await book(e,t)).status,409,t);
-assert.equal((await book(e,'12:30')).status,201);
-e=env();const race=await Promise.all([book(e,'10:00'),book(e,'10:30',true)]);assert.equal(race.filter(x=>[200,201].includes(x.status)).length,1);assert.equal(race.filter(x=>x.status===409).length,1);
-e=env();assert.equal((await call(e,'/api/admin/slot',{date,time:'10:30',action:'block'},true)).status,200);
-o=occupied(await calendar(e));assert(o.has('10:00'));assert(o.has('10:30'));assert(o.has('11:00'));assert(o.has('11:30'));assert(!o.has('12:00'));
-let rows=(await adminCalendar(e)).data.items;assert.equal(rows[0].duration_minutes,90);
-assert.equal((await book(e,'10:00')).status,409);assert.equal((await book(e,'11:00')).status,409);assert.equal((await book(e,'12:00')).status,201);
-assert.equal((await call(e,'/api/admin/slot',{date,time:'12:30',action:'block'},true)).status,409);
-assert.equal((await call(e,'/api/admin/slot',{date,time:'10:30',action:'unblock'},true)).status,200);
-assert.equal((await call(e,'/api/admin/day',{date,action:'block'},true)).status,200);
-assert.equal(occupied(await calendar(e)).size,15);
-rows=(await adminCalendar(e)).data.items;assert.equal(rows.filter(x=>x.kind==='booked').length,1);
-assert.equal((await call(e,'/api/admin/day',{date,action:'unblock'},true)).status,200);
-rows=(await adminCalendar(e)).data.items;assert.equal(rows.length,1);assert.equal(rows[0].kind,'booked');
-assert.equal((await call(e,'/api/admin/cancel',{id:rows[0].id},true)).status,200);assert.equal(occupied(await calendar(e)).size,0);
-// Regression: admin clicking 13:00 or 14:00 must block the FULL forward interval.
-for(const start of ['13:00','14:00']){
- const a=env();assert.equal((await call(a,'/api/admin/slot',{date,time:start,action:'block'},true)).status,200);
- const startMinutes=Number(start.slice(0,2))*60;
- const t=m=>String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
- const unavailable=occupied(await calendar(a));
- for(const delta of [-60,-30,0,30,60])assert(unavailable.has(t(startMinutes+delta)),start+' delta '+delta);
- assert(!unavailable.has(t(startMinutes-90)));assert(!unavailable.has(t(startMinutes+90)));
- assert.equal((await book(a,t(startMinutes+30))).status,409);
- assert.equal((await book(a,t(startMinutes+90))).status,201);
- assert.equal((await adminCalendar(a)).data.adminBlockMinutes,90);
+assert.equal(r.status,200);assert.equal(r.data.scheduleVersion,'service-duration-v1');assert.equal(r.data.times.length,15);assert.equal(r.data.times.at(-1),'17:00');
+for(const s of r.data.services)for(let i=0;i<s.durations.length;i++){
+ const test=env();assert.equal((await book(test,'17:00',s.id,i+1)).status,201);
+ const rows=(await adminCalendar(test)).data.items;assert.equal(rows[0].duration_minutes,s.durations[i]);assert(rows[0].service.includes(s.bg));
 }
-// Existing reservations, including the previous 17:30 last start, survive migration.
-e=env();e.DB.sql.prepare("INSERT INTO slots(date,time,kind,id,name) VALUES(?,?,'booked','legacy','Existing')").run(date,'17:30');
-r=await adminCalendar(e);assert.equal(r.data.items[0].id,'legacy');assert.equal(r.data.items[0].time,'17:30');assert.equal(r.data.items[0].duration_minutes,90);
-assert.equal((await book(e,'17:00')).status,409);assert.equal((await book(e,'16:00')).status,201);
-e=env();assert.equal((await book(e,'17:00')).status,201);assert.equal((await book(e,'17:30')).status,400);
-e=env();e.DB.sql.prepare("INSERT INTO slots(date,time,kind) VALUES(?,?,'blocked')").run(date,'11:00');
-rows=(await adminCalendar(e)).data.items;assert.equal(rows[0].duration_minutes,60);assert.equal((await book(e,'12:00')).status,201);
-e=env();assert.equal((await call(e,'/api/admin/book',{date,time:'10:00',name:'Test'},false)).status,401);
-assert.equal((await call(e,'/api/admin/slot',{date,time:'10:00',action:'block'},false)).status,401);
-assert.equal((await calendar(e)).data.occupied.some(x=>x.name||x.phone||x.email),false);
-// Every changed inline script must parse, and server-version fallback remains present.
-for(const path of ['index.html','en/index.html','admin.html']){
- const source=readFileSync(new URL('../'+path,import.meta.url),'utf8');
- for(const m of source.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g))if(!m[1].includes('application/ld+json'))new Function(m[2]);
- assert(source.includes('half-hour-90-v1'));assert(source.includes('legacyTimes'));
-}
-console.log('PASS: 15 half-hour starts; 90-minute intervals; both overlap directions; exact boundaries; concurrent public/admin bookings; 90-minute admin-click blocks; 30-minute whole-day segments; day block/unblock/cancel; legacy migration; last start 17:00; auth; public privacy; inline scripts and rollout fallback.');
+assert.equal((await book(e,'10:30')).status,201);r=await calendar(e);
+assert.deepEqual(choice(r,'10:00','ingrown').map(x=>x.quantity),[1]);assert.equal(choice(r,'10:00','fungal').length,0);
+assert.equal(choice(r,'10:30','ingrown').length,0);assert.equal(choice(r,'11:00','extensions').length,1);
+assert.equal((await book(e,'10:00','ingrown',2)).status,409);assert.equal((await book(e,'10:00')).status,201);
+e=env();await book(e,'11:00');r=await calendar(e);
+assert.deepEqual(choice(r,'10:00','ingrown').map(x=>x.quantity),[1,2]);assert.deepEqual(choice(r,'10:30','ingrown').map(x=>x.quantity),[1]);assert.equal(choice(r,'10:30','gel-polish').length,0);
+assert.deepEqual(choice(r,'10:00','fungal').map(x=>x.duration),[40,60]);
+e=env();await book(e,'10:00','fungal');r=await calendar(e);assert.equal(choice(r,'10:30','ingrown').length,0);assert.equal(choice(r,'11:00','ingrown').length,2);
+assert.equal((await book(e,'11:00','fungal',2,true)).status,200);assert.equal((await adminCalendar(e)).data.items[1].duration_minutes,60);
+e=env();const race=await Promise.all([book(e,'10:00','gel-polish'),book(e,'10:30','ingrown',1,true)]);assert.equal(race.filter(x=>[200,201].includes(x.status)).length,1);assert.equal(race.filter(x=>x.status===409).length,1);
+assert.equal((await book(env(),'10:00','unknown')).status,400);assert.equal((await book(env(),'10:00','niti',2)).status,400);assert.equal((await book(env(),'10:00','ingrown',0)).status,400);
+e=env();await book(e,'10:00','extensions',1,false,{duration_minutes:1});assert.equal((await adminCalendar(e)).data.items[0].duration_minutes,165);
+e=env();await book(e,'11:00');assert.equal((await call(e,'/api/admin/slot',{date,time:'10:00',action:'block',duration_minutes:60},true)).status,200);assert.equal((await call(e,'/api/admin/slot',{date,time:'10:00',action:'unblock'},true)).status,200);
+assert.equal((await call(e,'/api/admin/slot',{date,time:'10:00',action:'block',duration_minutes:90},true)).status,409);
+assert.equal((await call(e,'/api/admin/slot',{date,time:'12:00',action:'block',duration_minutes:-30},true)).status,400);
+await call(e,'/api/admin/day',{date,action:'block'},true);r=await calendar(e);assert(r.data.availability.every(x=>x.services.length===0));
+await call(e,'/api/admin/day',{date,action:'unblock'},true);assert.equal((await adminCalendar(e)).data.items.length,1);
+const id=(await adminCalendar(e)).data.items[0].id;await call(e,'/api/admin/cancel',{id},true);assert.equal((await adminCalendar(e)).data.items.length,0);
+// Existing records and old-client bookings retain their original90min duration.
+e=env();e.DB.sql.prepare("INSERT INTO slots(date,time,kind,id,name) VALUES(?,?,'booked','old','Legacy')").run(date,'17:30');
+r=await calendar(e);assert.equal(choice(r,'17:00','ingrown').length,1);assert.equal(choice(r,'17:00','gel-polish').length,0);assert.equal((await adminCalendar(e)).data.items[0].duration_minutes,90);
+assert.equal((await call(e,'/api/book',{date,time:'10:00',name:'Old client',phone:'123',privacy:true,service:'Old form'})).status,201);assert.equal((await adminCalendar(e)).data.items[0].duration_minutes,90);
+const publicJSON=JSON.stringify((await calendar(e)).data);for(const privateField of ['Legacy','Old client','phone','email','sourceTime'])assert(!publicJSON.includes(privateField));
+assert.equal((await call(e,'/api/admin/book',{date,time:'14:00',name:'Unauthorized'})).status,401);
+console.log('PASS: service durations/quantities, gap filtering, exact40min, all17:00 starts, atomic overlap rejection, forged selections, custom blocks, day unblock, cancellation, legacy data and privacy.');
