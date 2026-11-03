@@ -293,19 +293,23 @@ const bookingText={"pick": "Изберете услуга", "unit": "бр.", "mi
 
 const choices=(date,time)=>availability.find(x=>x.date===date&&x.time===time)?.services||[];
 const isTaken=(date,time)=>variable?!choices(date,time).length:occupied.has(date+' '+time);
+const bookingPrices={ingrown:[20,40],onycholysis:[15,30],thickened:[20,40],fungal:[10,20],hyperkeratosis:[20,40],niti:[30],'gel-polish':[25],'natural-gel':['30–35'],extensions:[50]};
+const priceText=(id,quantity=1)=>{const price=bookingPrices[id]?.[quantity-1];return price===undefined?'':String(price)+' €'};
+function serviceLabel(item,quantity=1){return item['bg']+(priceText(item.id,quantity)?' — '+priceText(item.id,quantity):'')}
+function refreshPriceLabels(){const selected=$('bk-service').value,quantity=Number($('bk-quantity').value)||1;for(const option of $('bk-service').options){const item=catalog.find(s=>s.id===option.value);if(item)option.text=serviceLabel(item,option.value===selected?quantity:1)}}
 function populateServices(preserve=false){
  if(!variable)return;const el=$('bk-service'),old=preserve?el.value:'',q=$('bk-quantity').value;el.replaceChildren();el.add(new Option(bookingText.pick,''));
- for(const c of choices(state.date,state.time)){const item=catalog.find(s=>s.id===c.id);if(item)el.add(new Option(item["bg"],item.id))}
+ for(const c of choices(state.date,state.time)){const item=catalog.find(s=>s.id===c.id);if(item)el.add(new Option(serviceLabel(item,c.quantities[0]?.quantity||1),item.id))}
  el.value=Array.from(el.options).some(o=>o.value===old)?old:'';if(preserve&&old&&!choices(state.date,state.time).find(c=>c.id===old)?.quantities.some(x=>x.quantity===Number(q)))el.value='';populateQuantity(q);
 }
 function populateQuantity(old='1'){
  const service=choices(state.date,state.time).find(s=>s.id===$('bk-service').value),el=$('bk-quantity');el.replaceChildren();
- if(service)for(const q of service.quantities)el.add(new Option(q.quantity+' '+bookingText.unit+' — '+q.duration+' '+bookingText.min,q.quantity));
+ if(service)for(const q of service.quantities)el.add(new Option(q.quantity+' '+bookingText.unit+' — '+q.duration+' '+bookingText.min+(priceText(service.id,q.quantity)?' — '+priceText(service.id,q.quantity):''),q.quantity));
  if(Array.from(el.options).some(o=>o.value===String(old)))el.value=old;
  $('bk-quantity-label').hidden=!(catalog.find(s=>s.id===$('bk-service').value)?.durations.length>1);updateSummary();
 }
 function validSelection(){return choices(state.date,state.time).find(s=>s.id===$('bk-service').value)?.quantities.find(q=>q.quantity===Number($('bk-quantity').value))}
-function updateSummary(){if(!variable)return;const q=validSelection(),start=state.time;if(!start)return;let text=state.date+' • '+start;if(q){const m=Number(start.slice(0,2))*60+Number(start.slice(3))+q.duration;text+='–'+String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0')+' • '+q.duration+' '+bookingText.min}$('bk-summary').textContent=text;$('bk-form').querySelector('[type=submit]').disabled=!q}
+function updateSummary(){if(!variable)return;refreshPriceLabels();const q=validSelection(),start=state.time;if(!start)return;let text=state.date+' • '+start;if(q){const m=Number(start.slice(0,2))*60+Number(start.slice(3))+q.duration;text+='–'+String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0')+' • '+q.duration+' '+bookingText.min}$('bk-summary').textContent=text;$('bk-form').querySelector('[type=submit]').disabled=!q}
 $('bk-service').onchange=()=>populateQuantity();$('bk-quantity').onchange=updateSummary;
 
 function move(n){const d=new Date(state.year,state.month+n,1);state.year=d.getFullYear();state.month=d.getMonth();state.date=null;state.time=null;$('bk-times').classList.add('bk-hidden');$('bk-form').classList.add('bk-hidden');render();refresh()}
