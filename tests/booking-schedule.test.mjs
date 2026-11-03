@@ -55,3 +55,11 @@ assert.equal((await call(e,'/api/book',{date,time:'10:00',name:'Old client',phon
 const publicJSON=JSON.stringify((await calendar(e)).data);for(const privateField of ['Legacy','Old client','phone','email','sourceTime'])assert(!publicJSON.includes(privateField));
 assert.equal((await call(e,'/api/admin/book',{date,time:'14:00',name:'Unauthorized'})).status,401);
 console.log('PASS: service durations/quantities, gap filtering, exact40min, all17:00 starts, atomic overlap rejection, forged selections, custom blocks, day unblock, cancellation, legacy data and privacy.');
+
+for(const quantity of [1,2]){
+ e=env();assert.equal((await book(e,'11:30','hyperkeratosis',quantity,true)).status,200);
+ const row=(await adminCalendar(e)).data.items[0];assert.equal(row.time,'11:30');assert.equal(row.duration_minutes,quantity*30);
+ r=await calendar(e);for(const t of ['10:00','10:30','11:00'])assert.equal(choice(r,t,'hyperkeratosis')[0].duration,30);
+ assert.equal(choice(r,'11:30','hyperkeratosis').length,0);assert.equal(choice(r,quantity===1?'12:00':'12:30','hyperkeratosis').length,2);
+}
+console.log('PASS regression: admin hyperkeratosis11:30 stores forward30/60min; earlier30min starts remain bookable.');
