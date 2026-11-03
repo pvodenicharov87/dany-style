@@ -1,0 +1,393 @@
+<!doctype html><html lang="bg"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>SMS настройка — Dany Style</title><style>body{max-width:850px;margin:24px auto;padding:18px;font:17px/1.6 Arial,sans-serif;background:#fff7fa;color:#49313d}h1,h2{color:#914e6c}button{font:inherit;padding:12px 18px;background:#a45f7d;color:white;border:0;border-radius:12px;cursor:pointer}a{color:#854765}code{background:#f5e7ee;padding:3px 6px;border-radius:4px}textarea{width:100%;height:160px;box-sizing:border-box;margin-top:18px;font:12px/1.4 monospace}section{background:white;border:1px solid #e4c7d3;border-radius:16px;padding:18px;margin:18px 0}#status{white-space:pre-wrap}</style></head><body><h1>SMS известия — Dany Style</h1><p>До клиента и Даниела при записване и отмяна. До 100 опита за изпращане общо. Два различни получателя използват 2 SMS за едно събитие.</p><section><h2>1. Акаунт</h2><p>Регистрирайте се в <a href="https://user.mobica.bg/register" target="_blank" rel="noopener">Mobica</a>. Потвърдете достъпа до SMS API, споделения изпращач и наличния баланс. Проверете минималното зареждане и крайната цена в портала преди плащане. Не заявявайте платен персонален изпращач за този начален вариант.</p><p>Тази конфигурация изпраща само към български мобилни номера. Чуждестранните номера се пропускат; имейлът продължава да работи.</p></section><section><h2>2. Cloudflare — настройки</h2><p><a href="https://dash.cloudflare.com/" target="_blank" rel="noopener">Cloudflare</a> → Workers &amp; Pages → dany-style → Settings → Variables and Secrets.</p><ul><li><code>MOBICA_USER</code> — Secret: потребителят за API в Mobica.</li><li><code>MOBICA_PASSWORD</code> — Secret: паролата за API в Mobica.</li><li><code>SMS_ADMIN_PHONE</code> — Secret: потвърденият мобилен номер на Даниела, започващ с +359.</li><li><code>SMS_MAX_MESSAGES</code> — Text: <code>100</code>.</li><li><code>SMS_ENABLED</code> — Text: <code>true</code>.</li></ul><p>Паролата се въвежда само като Secret в Cloudflare. Тази страница не приема и не записва пароли.</p></section><section><h2>3. Код</h2><p>Копирайте целия код. В същия Worker отворете Edit code, заменете целия worker.js и натиснете Deploy. Запазете съществуващите настройки за имейл, вход и базата данни.</p><button id="copy">Копирай целия Worker код</button><textarea id="code" readonly spellcheck="false" aria-label="Пълен код на Worker">var __defProp = Object.defineProperty;
+var __name = (target, value) =&gt; __defProp(target, &quot;name&quot;, { value, configurable: true });
+// src/worker.js
+var TIMES = Array.from({length:15},(_,i)=&gt;{const m=600+i*30;return String(Math.floor(m/60)).padStart(2,&quot;0&quot;)+&quot;:&quot;+String(m%60).padStart(2,&quot;0&quot;)});
+const SCHEDULE_VERSION = &quot;service-duration-v1&quot;;
+const SERVICES = [{&quot;id&quot;: &quot;ingrown&quot;, &quot;bg&quot;: &quot;Впит нокът&quot;, &quot;en&quot;: &quot;Ingrown toenail&quot;, &quot;durations&quot;: [30, 60]}, {&quot;id&quot;: &quot;onycholysis&quot;, &quot;bg&quot;: &quot;Онихолиза&quot;, &quot;en&quot;: &quot;Onycholysis&quot;, &quot;durations&quot;: [30, 60]}, {&quot;id&quot;: &quot;thickened&quot;, &quot;bg&quot;: &quot;Удебелени и деформирани нокти&quot;, &quot;en&quot;: &quot;Thickened and deformed nails&quot;, &quot;durations&quot;: [40, 80]}, {&quot;id&quot;: &quot;fungal&quot;, &quot;bg&quot;: &quot;Гъбични изменения по ноктите&quot;, &quot;en&quot;: &quot;Fungal nail changes&quot;, &quot;durations&quot;: [40, 60]}, {&quot;id&quot;: &quot;hyperkeratosis&quot;, &quot;bg&quot;: &quot;Хиперкератоза&quot;, &quot;en&quot;: &quot;Hyperkeratosis&quot;, &quot;durations&quot;: [30, 60]}, {&quot;id&quot;: &quot;niti&quot;, &quot;bg&quot;: &quot;Корекция с NiTi&quot;, &quot;en&quot;: &quot;NiTi nail correction&quot;, &quot;durations&quot;: [30]}, {&quot;id&quot;: &quot;gel-polish&quot;, &quot;bg&quot;: &quot;Гел лак&quot;, &quot;en&quot;: &quot;Gel polish&quot;, &quot;durations&quot;: [90]}, {&quot;id&quot;: &quot;natural-gel&quot;, &quot;bg&quot;: &quot;Гел върху естествен нокът&quot;, &quot;en&quot;: &quot;Gel on natural nails&quot;, &quot;durations&quot;: [150]}, {&quot;id&quot;: &quot;extensions&quot;, &quot;bg&quot;: &quot;Изграждане с гел&quot;, &quot;en&quot;: &quot;Gel nail extensions&quot;, &quot;durations&quot;: [165]}];
+const LEGACY_TIMES = [&quot;10:00&quot;,&quot;11:30&quot;,&quot;13:00&quot;,&quot;14:30&quot;,&quot;16:00&quot;,&quot;17:30&quot;];
+const APPOINTMENT_MINUTES = 90;
+var json =  __name((v, status = 200) =&gt; new Response(JSON.stringify(v), { status, headers: { &quot;content-type&quot;: &quot;application/json; charset=utf-8&quot;, &quot;cache-control&quot;: &quot;no-store&quot;, &quot;x-content-type-options&quot;: &quot;nosniff&quot; } }), &quot;json&quot;);
+var err =  __name((message, status = 400) =&gt; json({ error: message }, status), &quot;err&quot;);
+var safe =  __name((s, max = 2e3) =&gt; String(s ?? &quot;&quot;).trim().slice(0, max), &quot;safe&quot;);
+var validDate =  __name((s) =&gt; /^\d{4}-\d{2}-\d{2}$/.test(s) &amp;&amp; !Number.isNaN(Date.parse(s + &quot;T12:00:00Z&quot;)) &amp;&amp; ( new Date(s + &quot;T12:00:00Z&quot;)).toISOString().slice(0, 10) === s, &quot;validDate&quot;);
+var validTime =  __name((s) =&gt; TIMES.includes(s), &quot;validTime&quot;);
+var validEmail =  __name((s) =&gt; !s || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) &amp;&amp; s.length &lt; 160, &quot;validEmail&quot;);
+var localDate =  __name(() =&gt; new Intl.DateTimeFormat(&quot;en-CA&quot;, { timeZone: &quot;Europe/Sofia&quot;, year: &quot;numeric&quot;, month: &quot;2-digit&quot;, day: &quot;2-digit&quot; }).format( new Date()), &quot;localDate&quot;);
+var future =  __name((s) =&gt; validDate(s) &amp;&amp; s &gt;= localDate() &amp;&amp; s &lt;= new Date(Date.now() + 370 * 864e5).toISOString().slice(0, 10), &quot;future&quot;);
+var b64 =  __name((u) =&gt; btoa(String.fromCharCode(...u)), &quot;b64&quot;);
+async function sign(payload, secret) {
+  const key = await crypto.subtle.importKey(&quot;raw&quot;, new TextEncoder().encode(secret), { name: &quot;HMAC&quot;, hash: &quot;SHA-256&quot; }, false, [&quot;sign&quot;]);
+  const msg = b64(new TextEncoder().encode(JSON.stringify(payload)));
+  const sig = await crypto.subtle.sign(&quot;HMAC&quot;, key, new TextEncoder().encode(msg));
+  return msg + &quot;.&quot; + b64(new Uint8Array(sig)).replaceAll(&quot;+&quot;, &quot;-&quot;).replaceAll(&quot;/&quot;, &quot;_&quot;).replaceAll(&quot;=&quot;, &quot;&quot;);
+}
+__name(sign, &quot;sign&quot;);
+async function verify(token, secret) {
+  try {
+    const [msg, sig] = token.split(&quot;.&quot;);
+    if (!msg || !sig) return false;
+    const payload = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(msg), (c) =&gt; c.charCodeAt(0))));
+    if (!Number.isFinite(payload.exp) || payload.exp &lt;= Date.now()) return false;
+    return (await sign(payload, secret)).split(&quot;.&quot;)[1] === sig;
+  } catch {
+    return false;
+  }
+}
+__name(verify, &quot;verify&quot;);
+async function sendMail(env, subject, body, clientEmail, attachments = [], cancellation = null) {
+  if (!env.RESEND_API_KEY || !env.MAIL_FROM) return false;
+  const recipients = [...new Set((env.NOTIFY_EMAILS || &quot;&quot;).split(&quot;,&quot;).map(x =&gt; x.trim()).filter(Boolean))];
+  if (!recipients.length &amp;&amp; !cancellation) return false;
+  const text = body.split(&quot;\n&quot;).filter(line =&gt; !/^Номер:/.test(line)).join(&quot;\n&quot;);
+  const fields = {};
+  for (const line of text.split(&quot;\n&quot;)) {
+    const match = line.match(/^([^:]+):\s*(.*)$/);
+    if (match) fields[match[1]] = match[2];
+  }
+  const booking = subject.startsWith(&quot;Резервация&quot;) || Boolean(cancellation);
+  const date = fields[booking ? &quot;Дата&quot; : &quot;Предпочитана дата&quot;] || &quot;&quot;;
+  const prettyDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date.split(&quot;-&quot;).reverse().join(&quot;.&quot;) : date;
+  const clientSubject = cancellation ? &quot;Dany Style — отмяна на Вашия час&quot; : booking ? &quot;Dany Style — потвърждение на Вашия час&quot; : &quot;Dany Style — получихме Вашата заявка&quot;;
+  const greeting = fields[&quot;Име&quot;] ? &quot;Здравейте, &quot; + fields[&quot;Име&quot;] + &quot;,&quot; : &quot;Здравейте,&quot;;
+  const intro = cancellation ? &quot;Уведомяваме Ви, че Вашата резервация в Dany Style е отменена.&quot; : booking
+    ? &quot;Благодарим Ви за доверието. Вашият час в Dany Style е запазен.&quot;
+    : &quot;Благодарим Ви за заявката за домашно посещение. Ще се свържа с Вас, за да уточним подробностите и да потвърдим удобен час. Това писмо не е потвърждение на резервация.&quot;;
+  const rows = booking
+    ? [[&quot;Дата&quot;, prettyDate], [&quot;Час&quot;, fields[&quot;Час&quot;]], [&quot;Продължителност&quot;, fields[&quot;Продължителност&quot;]], [&quot;Услуга / бележка&quot;, fields[&quot;Услуга&quot;]]]
+    : [[&quot;Предпочитана дата&quot;, prettyDate], [&quot;Адрес&quot;, fields[&quot;Адрес&quot;]]];
+  const details = rows.filter(([, value]) =&gt; value);
+  const closing = cancellation ? &quot;Моля, приемете извиненията ми за причиненото неудобство. Ще се радвам да изберете нов удобен час през сайта или да се свържете с мен на 0897 001 475.&quot; : booking
+    ? &quot;Очаквам Ви! Ако се налага промяна или отмяна на часа, моля свържете се с мен на 0897 001 475.&quot;
+    : &quot;Ако имате допълнителни въпроси, можете да се свържете с мен на 0897 001 475.&quot;;
+  const reason = cancellation ? (cancellation.reason || &quot;За съжаление, поради непредвидени обстоятелства се налага да отменим Вашата резервация.&quot;) : &quot;&quot;;
+  const signature = &quot;Поздрави,\nДаниела Ангелова\nПодолог | Dany Style&quot;;
+  const clientText = [&quot;Dany Style&quot;, &quot;&quot;, greeting, &quot;&quot;, intro, &quot;&quot;, ...details.map(([label,value]) =&gt; label + &quot;: &quot; + value), ...(booking ? [&quot;Адрес: гр. Пловдив, ж.к. Тракия, ул. Съединение 45&quot;] : []), ...(cancellation ? [&quot;&quot;, reason] : []), &quot;&quot;, closing, &quot;&quot;, signature, &quot;https://www.dany.style/&quot;].join(&quot;\n&quot;);
+  const escape = value =&gt; String(value ?? &quot;&quot;).replace(/[&amp;&lt;&gt;&quot;&#x27;]/g, c =&gt; ({&quot;&amp;&quot;:&quot;&amp;amp;&quot;,&quot;&lt;&quot;:&quot;&amp;lt;&quot;,&quot;&gt;&quot;:&quot;&amp;gt;&quot;,&#x27;&quot;&#x27;:&quot;&amp;quot;&quot;,&quot;&#x27;&quot;:&quot;&amp;#39;&quot;}[c]));
+  const html = `&lt;!doctype html&gt;&lt;html lang=&quot;bg&quot;&gt;&lt;head&gt;&lt;meta charset=&quot;utf-8&quot;&gt;&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;&lt;/head&gt;&lt;body style=&quot;margin:0;padding:0;background:#fbf5f7;color:#493641;font-family:Arial,sans-serif&quot;&gt;&lt;table role=&quot;presentation&quot; width=&quot;100%&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot; style=&quot;background:#fbf5f7&quot;&gt;&lt;tr&gt;&lt;td align=&quot;center&quot; style=&quot;padding:24px 12px&quot;&gt;&lt;table role=&quot;presentation&quot; width=&quot;560&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot; style=&quot;width:100%;max-width:560px;background:#ffffff;border:1px solid #eedde4;border-radius:16px&quot;&gt;&lt;tr&gt;&lt;td style=&quot;padding:28px 24px 20px;border-bottom:1px solid #eedde4&quot;&gt;&lt;table role=&quot;presentation&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;https://www.dany.style/assets/home-0.png&quot; width=&quot;72&quot; height=&quot;72&quot; alt=&quot;Лого Dany Style&quot; style=&quot;display:block;width:72px;height:72px;border:0&quot;&gt;&lt;/td&gt;&lt;td style=&quot;padding-left:16px&quot;&gt;&lt;strong style=&quot;font-family:Georgia,serif;font-size:27px;color:#8b526c&quot;&gt;Dany Style&lt;/strong&gt;&lt;br&gt;&lt;span style=&quot;font-size:13px;color:#77616d&quot;&gt;Подологична грижа · Даниела Ангелова&lt;/span&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td style=&quot;padding:26px 24px;font-size:16px;line-height:1.65&quot;&gt;&lt;p style=&quot;margin:0 0 18px&quot;&gt;${escape(greeting)}&lt;/p&gt;&lt;p style=&quot;margin:0 0 22px&quot;&gt;${escape(intro)}&lt;/p&gt;&lt;table role=&quot;presentation&quot; width=&quot;100%&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot; style=&quot;background:#fcf4f7;border-radius:10px&quot;&gt;${details.map(([label,value]) =&gt; `&lt;tr&gt;&lt;td style=&quot;padding:10px 14px;vertical-align:top;font-size:14px;color:#765368;width:34%&quot;&gt;${escape(label)}&lt;/td&gt;&lt;td style=&quot;padding:10px 14px;font-size:15px;overflow-wrap:anywhere&quot;&gt;${escape(value)}&lt;/td&gt;&lt;/tr&gt;`).join(&quot;&quot;)}&lt;/table&gt;${booking ? &#x27;&lt;p style=&quot;font-size:14px;color:#77616d;margin:18px 0&quot;&gt;гр. Пловдив, ж.к. Тракия&lt;br&gt;ул. Съединение 45&lt;/p&gt;&#x27; : &#x27;&#x27;}${cancellation ? `&lt;p style=&quot;margin:22px 0;white-space:pre-wrap;overflow-wrap:anywhere&quot;&gt;${escape(reason)}&lt;/p&gt;` : &quot;&quot;}&lt;p style=&quot;margin:22px 0&quot;&gt;${escape(closing)}&lt;/p&gt;${cancellation ? &#x27;&lt;p style=&quot;margin:22px 0&quot;&gt;&lt;a href=&quot;https://www.dany.style/#rezervacii&quot; style=&quot;display:inline-block;background:#8b526c;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none&quot;&gt;Изберете нов час&lt;/a&gt;&lt;/p&gt;&#x27; : &quot;&quot;}&lt;p style=&quot;margin:0&quot;&gt;Поздрави,&lt;br&gt;&lt;strong style=&quot;color:#8b526c&quot;&gt;Даниела Ангелова&lt;/strong&gt;&lt;br&gt;&lt;span style=&quot;font-size:14px;color:#77616d&quot;&gt;Подолог | Dany Style&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td style=&quot;padding:18px 24px;border-top:1px solid #eedde4;font-size:13px;color:#77616d&quot;&gt;&lt;a href=&quot;tel:+359897001475&quot; style=&quot;color:#8b526c&quot;&gt;0897 001 475&lt;/a&gt; &amp;nbsp;·&amp;nbsp; &lt;a href=&quot;https://www.dany.style/&quot; style=&quot;color:#8b526c&quot;&gt;www.dany.style&lt;/a&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;&lt;/body&gt;&lt;/html&gt;`;
+  const send = async (to, sub, plain, files = [], markup) =&gt; {
+    try {
+      const payload = {from: env.MAIL_FROM, to: [to], subject: sub, text: plain};
+      if (files.length) payload.attachments = files;
+      if (markup) payload.html = markup;
+      const response = await fetch(&quot;https://api.resend.com/emails&quot;, {
+        method: &quot;POST&quot;,
+        headers: {Authorization: &quot;Bearer &quot; + env.RESEND_API_KEY, &quot;Content-Type&quot;: &quot;application/json&quot;},
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) console.error(&quot;Email provider error&quot;, response.status);
+      return response.ok;
+    } catch {
+      console.error(&quot;Email delivery request failed&quot;);
+      return false;
+    }
+  };
+  const results = cancellation ? [] : await Promise.all(recipients.map(to =&gt; send(to, subject, text, attachments)));
+  const clientSent = clientEmail ? await send(clientEmail, clientSubject, clientText, [], html) : true;
+  return results.every(Boolean) &amp;&amp; clientSent;
+}
+__name(sendMail, &quot;sendMail&quot;);
+
+const minutes = t =&gt; Number(t.slice(0,2))*60+Number(t.slice(3));
+const durationOf = row =&gt; Number(row.duration_minutes) &gt; 0 ? Number(row.duration_minutes) : (row.kind === &quot;booked&quot; || LEGACY_TIMES.includes(row.time) ? 90 : 60);
+const overlaps = (time,row,duration=APPOINTMENT_MINUTES) =&gt; minutes(time) &lt; minutes(row.time)+durationOf(row) &amp;&amp; minutes(row.time) &lt; minutes(time)+duration;
+const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90,services:SERVICES,cancellationEmailVersion:1};
+const expandSlots = rows =&gt; rows.flatMap(row =&gt; TIMES.filter(time=&gt;overlaps(time,row,30)).map(time=&gt;({date:row.date,time})));
+const schemaChecks = new WeakMap();
+async function ensureScheduleSchema(db) {
+  if (!schemaChecks.has(db)) schemaChecks.set(db,(async()=&gt;{
+    const columns = await db.prepare(&quot;PRAGMA table_info(slots)&quot;).all();
+    if (!columns.results.some(c=&gt;c.name === &quot;duration_minutes&quot;)) {
+      try { await db.prepare(&quot;ALTER TABLE slots ADD COLUMN duration_minutes INTEGER&quot;).run(); }
+      catch (e) { // Another Worker isolate may have added the column concurrently.
+        const current = await db.prepare(&quot;PRAGMA table_info(slots)&quot;).all();
+        if (!current.results.some(c=&gt;c.name === &quot;duration_minutes&quot;)) throw e;
+      }
+    }
+  })().catch(e=&gt;{schemaChecks.delete(db);throw e}));
+  await schemaChecks.get(db);
+}
+// The overlap predicate and insertion run in ONE SQLite statement. Different
+// start times therefore cannot race past a separate JavaScript availability check.
+const SQL_MINUTES = &quot;(CAST(substr(time,1,2) AS INTEGER)*60+CAST(substr(time,4,2) AS INTEGER))&quot;;
+const SQL_DURATION = &quot;COALESCE(duration_minutes,CASE WHEN kind=&#x27;booked&#x27; OR time IN (&#x27;10:00&#x27;,&#x27;11:30&#x27;,&#x27;13:00&#x27;,&#x27;14:30&#x27;,&#x27;16:00&#x27;,&#x27;17:30&#x27;) THEN 90 ELSE 60 END)&quot;;
+const CONFLICT_SQL = `SELECT 1 FROM slots WHERE date=? AND ${SQL_MINUTES}&lt;? AND ${SQL_MINUTES}+${SQL_DURATION}&gt;?`;
+async function insertBooking(env,date,time,booking) {
+  const result=await env.DB.prepare(`INSERT INTO slots(date,time,kind,id,name,phone,email,service,duration_minutes) SELECT ?,?,&#x27;booked&#x27;,?,?,?,?,?,? WHERE NOT EXISTS (${CONFLICT_SQL})`)
+    .bind(date,time,booking.id,booking.name,booking.phone||&quot;&quot;,booking.email||&quot;&quot;,booking.service||&quot;&quot;,booking.duration||90,date,minutes(time)+(booking.duration||90),minutes(time)).run();
+  return result.meta.changes === 1;
+}
+function selection(b) {
+  if (!b.serviceId) {
+    if (b.quantity !== undefined || b.duration_minutes !== undefined) return null;
+    return {service:safe(b.service,1000),duration:90};
+  }
+  const item=SERVICES.find(s=&gt;s.id===b.serviceId), quantity=Number(b.quantity ?? 1);
+  if (!item || !Number.isInteger(quantity) || quantity&lt;1 || quantity&gt;item.durations.length) return null;
+  return {service:item.bg+(item.durations.length&gt;1?` — ${quantity} бр.`:&quot;&quot;)+(safe(b.notes,700)?&quot; • &quot;+safe(b.notes,700):&quot;&quot;),duration:item.durations[quantity-1]};
+}
+function publicAvailability(rows,from,to) {
+  const out=[];
+  for(let date=from;date&lt;=to;date=new Date(Date.parse(date+&quot;T12:00:00Z&quot;)+86400000).toISOString().slice(0,10)) {
+    for(const time of TIMES) out.push({date,time,services:SERVICES.map(s=&gt;({id:s.id,quantities:s.durations.map((duration,i)=&gt;({quantity:i+1,duration})).filter(q=&gt;!rows.some(x=&gt;x.date===date&amp;&amp;overlaps(time,x,q.duration)))})).filter(s=&gt;s.quantities.length)});
+  }
+  return out;
+}
+function blockStatement(db,date,time,duration=30) {
+  return db.prepare(`INSERT INTO slots(date,time,kind,duration_minutes) SELECT ?,?,&#x27;blocked&#x27;,? WHERE NOT EXISTS (${CONFLICT_SQL})`)
+    .bind(date,time,duration,date,minutes(time)+duration,minutes(time));
+}
+
+// Transactional SMS: Mobica v2, one short Unicode message per recipient.
+// Secrets live only in Worker environment variables; SMS stays off until configured.
+function smsPhone(value) {
+  let phone=String(value||&quot;&quot;).replace(/[\s().-]/g,&quot;&quot;);
+  if(phone.startsWith(&quot;+&quot;))phone=phone.slice(1);
+  if(phone.startsWith(&quot;00&quot;))phone=phone.slice(2);
+  if(/^0[789]\d{8}$/.test(phone))phone=&quot;359&quot;+phone.slice(1);
+  if(/^3590[789]\d{8}$/.test(phone))phone=&quot;359&quot;+phone.slice(4);
+  return /^359(?:87|88|89|98|99)\d{7}$/.test(phone)?phone:null;
+}
+const smsLimit=env=&gt;{const n=Number(env.SMS_MAX_MESSAGES||100);return Number.isInteger(n)&amp;&amp;n&gt;=1&amp;&amp;n&lt;=10000?n:100};
+const smsConfigured=env=&gt;env.SMS_ENABLED===&quot;true&quot;&amp;&amp;Boolean(env.MOBICA_USER)&amp;&amp;Boolean(env.MOBICA_PASSWORD)&amp;&amp;Boolean(smsPhone(env.SMS_ADMIN_PHONE));
+const smsSchema=new WeakMap();
+async function ensureSmsSchema(db){
+  if(!smsSchema.has(db))smsSchema.set(db,db.prepare(&quot;CREATE TABLE IF NOT EXISTS dany_sms_log (message_key TEXT PRIMARY KEY,event TEXT NOT NULL,recipient_role TEXT NOT NULL,created_at INTEGER NOT NULL,status TEXT NOT NULL,provider_code TEXT)&quot;).run().catch(e=&gt;{smsSchema.delete(db);throw e}));
+  await smsSchema.get(db);
+}
+function smsMessage(event,booking,role){
+  const date=String(booking.date).split(&quot;-&quot;).reverse().join(&quot;.&quot;),when=date+&quot;, &quot;+booking.time;
+  if(role===&quot;client&quot;)return event===&quot;booked&quot;?&quot;Dany Style: Часът Ви е запазен за &quot;+when+&quot;.&quot;:&quot;Dany Style: Часът Ви на &quot;+when+&quot; е отменен.&quot;;
+  const phone=smsPhone(booking.phone),contact=phone?&quot;0&quot;+phone.slice(3):&quot;няма&quot;;
+  return event===&quot;booked&quot;?&quot;Dany Style: Нов час &quot;+when+&quot;. Тел. &quot;+contact:&quot;Dany Style: Отменен час &quot;+when+&quot;.&quot;;
+}
+async function sendSmsOnce(env,event,booking,role,phone){
+  if(!phone)return &quot;no_bg_mobile&quot;;
+  const message=smsMessage(event,booking,role);
+  // Mobica documents67 Unicode characters per part. Never allow a paid second part.
+  if(message.length&gt;67)return &quot;too_long&quot;;
+  const key=booking.id+&quot;:&quot;+event+&quot;:&quot;+role;
+  try{
+    await ensureSmsSchema(env.DB);
+    // Reservation of quota and deduplication happen atomically, including across isolates.
+    const claimed=await env.DB.prepare(&quot;INSERT INTO dany_sms_log(message_key,event,recipient_role,created_at,status) SELECT ?,?,?,?, &#x27;reserved&#x27; WHERE NOT EXISTS(SELECT 1 FROM dany_sms_log WHERE message_key=?) AND (SELECT COUNT(*) FROM dany_sms_log)&lt;?&quot;).bind(key,event,role,Date.now(),key,smsLimit(env)).run();
+    if(!claimed.meta.changes){const prior=await env.DB.prepare(&quot;SELECT status FROM dany_sms_log WHERE message_key=?&quot;).bind(key).first();return prior?prior.status:&quot;quota_reached&quot;}
+    let status=&quot;unknown&quot;,providerCode=&quot;&quot;;
+    try{
+      const bytes=new TextEncoder().encode(String(env.MOBICA_USER)+&quot;:&quot;+String(env.MOBICA_PASSWORD));
+      const response=await fetch(&quot;https://gate.mobica.bg/v2/multi/json/sms.php&quot;,{method:&quot;POST&quot;,headers:{Authorization:&quot;Basic &quot;+b64(bytes),Accept:&quot;application/json&quot;,&quot;Content-Type&quot;:&quot;application/json&quot;},body:JSON.stringify({sms:[{idd:key,phone,message}]}),signal:AbortSignal.timeout(10000)});
+      const result=await response.json().catch(()=&gt;null);
+      providerCode=String(result?.code||response.status).slice(0,20);
+      status=response.ok&amp;&amp;Number(result?.code)===1004?&quot;accepted&quot;:(result?.code?&quot;rejected&quot;:&quot;unknown&quot;);
+    }catch{status=&quot;unknown&quot;}
+    await env.DB.prepare(&quot;UPDATE dany_sms_log SET status=?,provider_code=? WHERE message_key=?&quot;).bind(status,providerCode,key).run();
+    return status;
+  }catch{console.error(&quot;SMS notification processing failed&quot;);return &quot;unconfirmed&quot;}
+}
+async function notifySms(env,event,booking){
+  if(!smsConfigured(env))return {enabled:false};
+  const clientPhone=smsPhone(booking.phone),adminPhone=smsPhone(env.SMS_ADMIN_PHONE);
+  // The client has priority when only one message remains in the100-message limit.
+  const client=await sendSmsOnce(env,event,booking,&quot;client&quot;,clientPhone);
+  const admin=clientPhone===adminPhone?&quot;same_recipient&quot;:await sendSmsOnce(env,event,booking,&quot;admin&quot;,adminPhone);
+  return {enabled:true,client,admin};
+}
+async function smsOverview(env){
+  await ensureSmsSchema(env.DB);
+  const row=await env.DB.prepare(&quot;SELECT COUNT(*) AS used FROM dany_sms_log&quot;).first();
+  const used=Number(row?.used||0),limit=smsLimit(env);
+  return {enabled:smsConfigured(env),provider:&quot;mobica&quot;,limit,used,remaining:Math.max(0,limit-used)};
+}
+
+async function handle(request, env) {
+  const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get(&quot;CF-Connecting-IP&quot;) || &quot;unknown&quot;;
+  if (!env.DB) return err(&quot;\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438&quot;, 503);
+  if (method === &quot;GET&quot; &amp;&amp; path === &quot;/api/schedule&quot;) return json({...scheduleInfo,smsVersion:1,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
+  if (method === &quot;GET&quot; &amp;&amp; path === &quot;/api/calendar&quot;) {
+    await ensureScheduleSchema(env.DB);
+    const from = url.searchParams.get(&quot;from&quot;), to = url.searchParams.get(&quot;to&quot;);
+    if (!validDate(from) || !validDate(to) || from &gt; to || Date.parse(to) - Date.parse(from) &gt; 35 * 864e5) return err(&quot;\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u043F\u0435\u0440\u0438\u043E\u0434&quot;);
+    const rows = await env.DB.prepare(&quot;SELECT date,time,kind,duration_minutes FROM slots WHERE date BETWEEN ? AND ?&quot;).bind(from, to).all();
+    return json({ ...scheduleInfo, occupied: expandSlots(rows.results), availability:publicAvailability(rows.results,from,to) });
+  }
+  if (method === &quot;POST&quot; &amp;&amp; path === &quot;/api/book&quot;) {
+    const b = await request.json();
+    const date = safe(b.date, 10), time = safe(b.time, 5), name = safe(b.name, 100), phone = safe(b.phone, 30), email = safe(b.email, 160), service = safe(b.service, 1e3);
+    if (!future(date) || !validTime(time) || !name || !phone || !validEmail(email) || b.privacy !== true) return err(&quot;\u041F\u0440\u043E\u0432\u0435\u0440\u0435\u0442\u0435 \u043F\u043E\u043F\u044A\u043B\u043D\u0435\u043D\u0438\u0442\u0435 \u0434\u0430\u043D\u043D\u0438 \u0438 \u0441\u044A\u0433\u043B\u0430\u0441\u0438\u0435\u0442\u043E.&quot;);
+    const selected=selection(b);
+    if(!selected)return err(&quot;Изберете валидна услуга и брой.&quot;);
+    const id = crypto.randomUUID();
+    try {
+      await ensureScheduleSchema(env.DB);
+      if (!await insertBooking(env,date,time,{id,name,phone,email,...selected})) return err(&quot;Този час вече е зает. Моля, изберете друг.&quot;,409);
+    } catch {
+      return err(&quot;\u0422\u043E\u0437\u0438 \u0447\u0430\u0441 \u0432\u0435\u0447\u0435 \u0435 \u0437\u0430\u0435\u0442. \u041C\u043E\u043B\u044F, \u0438\u0437\u0431\u0435\u0440\u0435\u0442\u0435 \u0434\u0440\u0443\u0433.&quot;, 409);
+    }
+    const sent = await sendMail(env, &quot;\u0420\u0435\u0437\u0435\u0440\u0432\u0430\u0446\u0438\u044F Dany Style \u2014 &quot; + date + &quot; &quot; + time, `\u041D\u043E\u043C\u0435\u0440: ${id}
+\u0418\u043C\u0435: ${name}
+\u0422\u0435\u043B\u0435\u0444\u043E\u043D: ${phone}
+\u0418\u043C\u0435\u0439\u043B: ${email}
+\u0414\u0430\u0442\u0430: ${date}
+\u0427\u0430\u0441: ${time}
+\u0423\u0441\u043B\u0443\u0433\u0430: ${selected.service}
+Продължителност: ${selected.duration} мин.`, email);
+    const sms=await notifySms(env,&quot;booked&quot;,{id,date,time,phone});
+    return json({ id, emailSent: sent, sms }, 201);
+  }
+  if (method === &quot;POST&quot; &amp;&amp; path === &quot;/api/home-request&quot;) {
+    const fd = await request.formData();
+    const name = safe(fd.get(&quot;name&quot;), 100), phone = safe(fd.get(&quot;phone&quot;), 30), email = safe(fd.get(&quot;email&quot;), 160), address = safe(fd.get(&quot;address&quot;), 250), date = safe(fd.get(&quot;date&quot;), 10), details = safe(fd.get(&quot;details&quot;), 2e3);
+    if (!name || !phone || !address || !future(date) || !validEmail(email) || fd.get(&quot;privacy&quot;) !== &quot;yes&quot;) return err(&quot;\u041F\u043E\u043F\u044A\u043B\u043D\u0435\u0442\u0435 \u0437\u0430\u0434\u044A\u043B\u0436\u0438\u0442\u0435\u043B\u043D\u0438\u0442\u0435 \u043F\u043E\u043B\u0435\u0442\u0430 \u0438 \u0441\u044A\u0433\u043B\u0430\u0441\u0438\u0435\u0442\u043E.&quot;);
+    const photo = fd.get(&quot;photo&quot;), attachments = [];
+    if (photo &amp;&amp; typeof photo === &quot;object&quot; &amp;&amp; photo.size) {
+      if (photo.size &gt; 5 * 1024 * 1024) return err(&quot;\u0421\u043D\u0438\u043C\u043A\u0430\u0442\u0430 \u0442\u0440\u044F\u0431\u0432\u0430 \u0434\u0430 \u0435 \u0434\u043E 5 MB.&quot;);
+      if (![&quot;image/jpeg&quot;, &quot;image/png&quot;, &quot;image/webp&quot;].includes(photo.type)) return err(&quot;\u0414\u043E\u043F\u0443\u0441\u0442\u0438\u043C\u0438 \u0444\u043E\u0440\u043C\u0430\u0442\u0438: JPG, PNG \u0438 WEBP.&quot;);
+      const bytes = new Uint8Array(await photo.arrayBuffer());
+      let binary = &quot;&quot;;
+      for (let i = 0; i &lt; bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+      attachments.push({ filename: photo.name.replace(/[^a-zA-Z0-9._-]/g, &quot;_&quot;).slice(0, 100) || &quot;photo.jpg&quot;, content: btoa(binary) });
+    }
+    if (!env.RESEND_API_KEY || !env.MAIL_FROM) return err(&quot;\u0418\u0437\u043F\u0440\u0430\u0449\u0430\u043D\u0435\u0442\u043E \u043D\u0430 \u0438\u043C\u0435\u0439\u043B\u0438 \u043E\u0449\u0435 \u043D\u0435 \u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D\u043E. \u041E\u043F\u0438\u0442\u0430\u0439\u0442\u0435 \u043F\u043E-\u043A\u044A\u0441\u043D\u043E.&quot;, 503);
+    const sent = await sendMail(env, &quot;\u0417\u0430\u044F\u0432\u043A\u0430 \u0437\u0430 \u0434\u043E\u043C\u0430\u0448\u043D\u043E \u043F\u043E\u0441\u0435\u0449\u0435\u043D\u0438\u0435 Dany Style&quot;, `\u0418\u043C\u0435: ${name}
+\u0422\u0435\u043B\u0435\u0444\u043E\u043D: ${phone}
+\u0418\u043C\u0435\u0439\u043B: ${email}
+\u0410\u0434\u0440\u0435\u0441: ${address}
+\u041F\u0440\u0435\u0434\u043F\u043E\u0447\u0438\u0442\u0430\u043D\u0430 \u0434\u0430\u0442\u0430: ${date}
+\u041E\u043F\u0438\u0441\u0430\u043D\u0438\u0435: ${details}
+\u0421\u043D\u0438\u043C\u043A\u0438: ${attachments.length}`, email, attachments);
+    if (!sent) return err(&quot;\u041D\u0435\u0443\u0441\u043F\u0435\u0448\u043D\u043E \u0438\u0437\u043F\u0440\u0430\u0449\u0430\u043D\u0435. \u041E\u043F\u0438\u0442\u0430\u0439\u0442\u0435 \u043E\u0442\u043D\u043E\u0432\u043E.&quot;, 503);
+    return json({ ok: true });
+  }
+  if (path === &quot;/api/admin/login&quot; &amp;&amp; method === &quot;POST&quot;) {
+    const attempt = await env.DB.prepare(&quot;SELECT failures,last_failure FROM login_attempts WHERE ip=?&quot;).bind(ip).first();
+    const now = Math.floor(Date.now() / 1e3);
+    if (attempt &amp;&amp; attempt.failures &gt;= 5 &amp;&amp; now - attempt.last_failure &lt; 900) return err(&quot;\u0422\u0432\u044A\u0440\u0434\u0435 \u043C\u043D\u043E\u0433\u043E \u043E\u043F\u0438\u0442\u0438. \u041E\u043F\u0438\u0442\u0430\u0439\u0442\u0435 \u0441\u043B\u0435\u0434 15 \u043C\u0438\u043D\u0443\u0442\u0438.&quot;, 429);
+    const body = await request.json();
+    if (!env.ADMIN_PASSWORD || !env.SESSION_SECRET) return err(&quot;\u0410\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0441\u043A\u0438\u044F\u0442 \u0434\u043E\u0441\u0442\u044A\u043F \u043D\u0435 \u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D&quot;, 503);
+    if (body.password !== env.ADMIN_PASSWORD) {
+      await env.DB.prepare(&quot;INSERT INTO login_attempts(ip,failures,last_failure) VALUES(?,1,?) ON CONFLICT(ip) DO UPDATE SET failures=CASE WHEN ?-last_failure&gt;900 THEN 1 ELSE failures+1 END,last_failure=?&quot;).bind(ip, now, now, now).run();
+      return err(&quot;\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u043D\u0430 \u043F\u0430\u0440\u043E\u043B\u0430&quot;, 401);
+    }
+    await env.DB.prepare(&quot;DELETE FROM login_attempts WHERE ip=?&quot;).bind(ip).run();
+    return json({ token: await sign({ exp: Date.now() + 8 * 36e5, nonce: crypto.randomUUID() }, env.SESSION_SECRET) });
+  }
+  if (path.startsWith(&quot;/api/admin/&quot;)) {
+    const token = (request.headers.get(&quot;authorization&quot;) || &quot;&quot;).replace(/^Bearer\s+/i, &quot;&quot;);
+    if (!env.SESSION_SECRET || !await verify(token, env.SESSION_SECRET)) return err(&quot;\u041C\u043E\u043B\u044F, \u0432\u043B\u0435\u0437\u0442\u0435 \u043E\u0442\u043D\u043E\u0432\u043E \u0432 \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0441\u043A\u0438\u044F \u043F\u0430\u043D\u0435\u043B.&quot;, 401);
+    await ensureScheduleSchema(env.DB);
+    if(method===&quot;GET&quot;&amp;&amp;path===&quot;/api/admin/sms-status&quot;)return json(await smsOverview(env));
+    if (method === &quot;GET&quot; &amp;&amp; path === &quot;/api/admin/calendar&quot;) {
+      const from = url.searchParams.get(&quot;from&quot;), to = url.searchParams.get(&quot;to&quot;);
+      if (!validDate(from) || !validDate(to) || from &gt; to || Date.parse(to) - Date.parse(from) &gt; 35 * 864e5) return err(&quot;\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u043F\u0435\u0440\u0438\u043E\u0434&quot;);
+      const rows = await env.DB.prepare(&quot;SELECT date,time,kind,id,name,phone,email,service,duration_minutes FROM slots WHERE date BETWEEN ? AND ? ORDER BY date,time&quot;).bind(from, to).all();
+      return json({ ...scheduleInfo, items: rows.results.map(row=&gt;({...row,duration_minutes:durationOf(row)})), occupied:expandSlots(rows.results) });
+    }
+    if (method === &quot;POST&quot;) {
+      const b = await request.json(), date = safe(b.date, 10), time = safe(b.time, 5);
+      if (path === &quot;/api/admin/cancel&quot;) {
+        if (!b.id) return err(&quot;\u041B\u0438\u043F\u0441\u0432\u0430 \u043D\u043E\u043C\u0435\u0440&quot;);
+        if (b.reason !== undefined &amp;&amp; (typeof b.reason !== &quot;string&quot; || b.reason.length &gt; 2000)) return err(&quot;Причината трябва да е текст до 2000 знака.&quot;);
+        const reason = safe(b.reason,2000);
+        // Delete and return the original booking in one atomic statement. A repeated
+        // or concurrent cancellation cannot delete a new booking or send twice.
+        const booking = await env.DB.prepare(&quot;DELETE FROM slots WHERE id=? AND kind=&#x27;booked&#x27; RETURNING id,date,time,name,phone,email,service,duration_minutes&quot;).bind(safe(b.id,100)).first();
+        if (!booking) return err(&quot;Резервацията вече е отменена или не съществува.&quot;,404);
+        let clientEmailStatus = &quot;not_provided&quot;;
+        if (booking.email) {
+          const sent = await sendMail(env,&quot;Отменена резервация Dany Style — &quot;+booking.date+&quot; &quot;+booking.time,
+            `Име: ${booking.name || &quot;&quot;}\nДата: ${booking.date}\nЧас: ${booking.time}\nПродължителност: ${durationOf(booking)} мин.\nУслуга: ${booking.service || &quot;&quot;}`,booking.email,[],{reason});
+          clientEmailStatus = sent ? &quot;sent&quot; : &quot;failed&quot;;
+        }
+        const sms=await notifySms(env,&quot;cancelled&quot;,booking);
+        return json({ ok: true, cancelled:true, clientEmailStatus, sms });
+      }
+      if (!validDate(date)) return err(&quot;\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u043D\u0430 \u0434\u0430\u0442\u0430&quot;);
+      if (path === &quot;/api/admin/slot&quot;) {
+        if (!validTime(time) &amp;&amp; !(b.action === &quot;unblock&quot; &amp;&amp; /^1[0-8]:[03]0$/.test(time))) return err(&quot;\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u0447\u0430\u0441&quot;);
+        if (b.action === &quot;block&quot;) {
+          const duration=Number(b.duration_minutes ?? 90);
+          if(![30,40,60,80,90,120,150,165,180].includes(duration))return err(&quot;Невалидна продължителност.&quot;);
+          const result = await blockStatement(env.DB,date,time,duration).run();
+          if (!result.meta.changes) return err(&quot;Периодът вече е зает. Обновете календара.&quot;,409);
+          return json({ ok: true });
+        }
+        if (b.action === &quot;unblock&quot;) {
+          await env.DB.prepare(&quot;DELETE FROM slots WHERE date=? AND time=? AND kind=&#x27;blocked&#x27;&quot;).bind(date, time).run();
+          return json({ ok: true });
+        }
+      }
+      if (path === &quot;/api/admin/day&quot;) {
+        if (b.action === &quot;block&quot;) {
+          await env.DB.batch(TIMES.map(t=&gt;blockStatement(env.DB,date,t)));
+          return json({ ok: true });
+        }
+        if (b.action === &quot;unblock&quot;) {
+          await env.DB.prepare(&quot;DELETE FROM slots WHERE date=? AND kind=&#x27;blocked&#x27;&quot;).bind(date).run();
+          return json({ ok: true });
+        }
+      }
+      if (path === &quot;/api/admin/book&quot;) {
+        const name = safe(b.name, 100), phone = safe(b.phone, 30), service = safe(b.service, 1e3);
+        const selected=selection(b);
+        if(!selected)return err(&quot;Изберете валидна услуга и брой.&quot;);
+        if (!validTime(time) || !name) return err(&quot;\u041B\u0438\u043F\u0441\u0432\u0430\u0442 \u0434\u0430\u043D\u043D\u0438&quot;);
+        try {
+          const id=crypto.randomUUID();
+          if (!await insertBooking(env,date,time,{id,name,phone,...selected})) return err(&quot;Този час вече е зает.&quot;,409);
+          const sms=await notifySms(env,&quot;booked&quot;,{id,date,time,phone});
+          return json({ ok: true, sms });
+        } catch {
+          return err(&quot;\u0427\u0430\u0441\u044A\u0442 \u0435 \u0437\u0430\u0435\u0442&quot;, 409);
+        }
+      }
+    }
+    return err(&quot;\u041D\u0435\u043F\u043E\u0437\u043D\u0430\u0442\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u044F&quot;, 404);
+  }
+  return err(&quot;\u041D\u0435\u043F\u043E\u0437\u043D\u0430\u0442\u0430 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u044F&quot;, 404);
+}
+__name(handle, &quot;handle&quot;);
+const ALLOWED_ORIGINS = new Set([
+  &quot;https://www.dany.style&quot;, &quot;https://dany.style&quot;,
+  &quot;https://dany-style.danystyle.workers.dev&quot;
+]);
+function corsResponse(response, origin) {
+  const headers = new Headers(response.headers);
+  if (origin &amp;&amp; ALLOWED_ORIGINS.has(origin)) {
+    headers.set(&quot;Access-Control-Allow-Origin&quot;, origin);
+    headers.set(&quot;Vary&quot;, &quot;Origin&quot;);
+    headers.set(&quot;Access-Control-Allow-Methods&quot;, &quot;GET, POST, OPTIONS&quot;);
+    headers.set(&quot;Access-Control-Allow-Headers&quot;, &quot;Content-Type, Authorization&quot;);
+    headers.set(&quot;Access-Control-Max-Age&quot;, &quot;600&quot;);
+  }
+  return new Response(response.body, {status: response.status, headers});
+}
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const origin = request.headers.get(&quot;Origin&quot;);
+    if (!url.pathname.startsWith(&quot;/api/&quot;)) {
+      return Response.redirect(&quot;https://www.dany.style/&quot;, 302);
+    }
+    if (origin &amp;&amp; !ALLOWED_ORIGINS.has(origin)) {
+      return err(&quot;Origin not allowed&quot;, 403);
+    }
+    if (request.method === &quot;OPTIONS&quot;) {
+      return corsResponse(new Response(null, {status: 204}), origin);
+    }
+    let response;
+    try {
+      if (url.pathname === &quot;/api/admin/session&quot; &amp;&amp; request.method === &quot;GET&quot;) {
+        const token = (request.headers.get(&quot;Authorization&quot;) || &quot;&quot;).replace(/^Bearer\s+/i, &quot;&quot;);
+        const authenticated = !!env.SESSION_SECRET &amp;&amp; await verify(token, env.SESSION_SECRET);
+        response = authenticated ? json({ok: true}) : err(&quot;Моля, влезте в администраторския панел.&quot;, 401);
+      } else {
+        response = await handle(request, env);
+      }
+    } catch (e) {
+      console.error(&quot;DanyStyle request failed&quot;, e?.name || &quot;Error&quot;);
+      response = err(&quot;Възникна технически проблем. Опитайте отново.&quot;, 500);
+    }
+    return corsResponse(response, origin);
+  }
+};
+
+</textarea><p><a href="backend/worker-sms-mobica.txt" download>Изтегли кода като TXT файл</a></p></section><section><h2>4. Проверка</h2><button id="check">Провери настройките</button><p id="status" role="status">SMS още не са проверени. Потвърждението на настройките не доказва доставка до телефона.</p><p>След свързването направете контролирана резервация и отмяна със собствени номера и проверете получаването и на двата телефона. Всеки тест използва баланс и част от лимита. При грешка няма автоматичен повторен опит.</p></section><script>const code=document.getElementById('code'),status=document.getElementById('status');document.getElementById('copy').onclick=async()=>{try{await navigator.clipboard.writeText(code.value);status.textContent='Пълният код е копиран.'}catch{code.focus();code.select();status.textContent='Кодът е избран. Копирайте го от менюто.'}};document.getElementById('check').onclick=async()=>{status.textContent='Проверка…';try{const r=await fetch('https://dany-style.danystyle.workers.dev/api/schedule'),j=await r.json();if(!r.ok)throw Error('Няма връзка с Worker');status.textContent=j.smsVersion===1?(j.smsEnabled?'Настройките за SMS са включени. Общ лимит: '+j.smsLimit+' опита. Остава проверка на действителното получаване на SMS.':'Новият код е активен, но SMS са изключени или липсват настройки. Проверете Secrets и SMS_ENABLED. Номерът на Даниела трябва да е български мобилен номер.'):'SMS кодът още не е активен. Поставете новия код в Worker и натиснете Deploy.'}catch(e){status.textContent=e.message}};</script></body></html>

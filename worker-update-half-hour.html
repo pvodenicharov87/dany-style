@@ -137,10 +137,71 @@ function blockStatement(db,date,time,duration=30) {
     .bind(date,time,duration,date,minutes(time)+duration,minutes(time));
 }
 
+// Transactional SMS: Mobica v2, one short Unicode message per recipient.
+// Secrets live only in Worker environment variables; SMS stays off until configured.
+function smsPhone(value) {
+  let phone=String(value||&quot;&quot;).replace(/[\s().-]/g,&quot;&quot;);
+  if(phone.startsWith(&quot;+&quot;))phone=phone.slice(1);
+  if(phone.startsWith(&quot;00&quot;))phone=phone.slice(2);
+  if(/^0[789]\d{8}$/.test(phone))phone=&quot;359&quot;+phone.slice(1);
+  if(/^3590[789]\d{8}$/.test(phone))phone=&quot;359&quot;+phone.slice(4);
+  return /^359(?:87|88|89|98|99)\d{7}$/.test(phone)?phone:null;
+}
+const smsLimit=env=&gt;{const n=Number(env.SMS_MAX_MESSAGES||100);return Number.isInteger(n)&amp;&amp;n&gt;=1&amp;&amp;n&lt;=10000?n:100};
+const smsConfigured=env=&gt;env.SMS_ENABLED===&quot;true&quot;&amp;&amp;Boolean(env.MOBICA_USER)&amp;&amp;Boolean(env.MOBICA_PASSWORD)&amp;&amp;Boolean(smsPhone(env.SMS_ADMIN_PHONE));
+const smsSchema=new WeakMap();
+async function ensureSmsSchema(db){
+  if(!smsSchema.has(db))smsSchema.set(db,db.prepare(&quot;CREATE TABLE IF NOT EXISTS dany_sms_log (message_key TEXT PRIMARY KEY,event TEXT NOT NULL,recipient_role TEXT NOT NULL,created_at INTEGER NOT NULL,status TEXT NOT NULL,provider_code TEXT)&quot;).run().catch(e=&gt;{smsSchema.delete(db);throw e}));
+  await smsSchema.get(db);
+}
+function smsMessage(event,booking,role){
+  const date=String(booking.date).split(&quot;-&quot;).reverse().join(&quot;.&quot;),when=date+&quot;, &quot;+booking.time;
+  if(role===&quot;client&quot;)return event===&quot;booked&quot;?&quot;Dany Style: Часът Ви е запазен за &quot;+when+&quot;.&quot;:&quot;Dany Style: Часът Ви на &quot;+when+&quot; е отменен.&quot;;
+  const phone=smsPhone(booking.phone),contact=phone?&quot;0&quot;+phone.slice(3):&quot;няма&quot;;
+  return event===&quot;booked&quot;?&quot;Dany Style: Нов час &quot;+when+&quot;. Тел. &quot;+contact:&quot;Dany Style: Отменен час &quot;+when+&quot;.&quot;;
+}
+async function sendSmsOnce(env,event,booking,role,phone){
+  if(!phone)return &quot;no_bg_mobile&quot;;
+  const message=smsMessage(event,booking,role);
+  // Mobica documents67 Unicode characters per part. Never allow a paid second part.
+  if(message.length&gt;67)return &quot;too_long&quot;;
+  const key=booking.id+&quot;:&quot;+event+&quot;:&quot;+role;
+  try{
+    await ensureSmsSchema(env.DB);
+    // Reservation of quota and deduplication happen atomically, including across isolates.
+    const claimed=await env.DB.prepare(&quot;INSERT INTO dany_sms_log(message_key,event,recipient_role,created_at,status) SELECT ?,?,?,?, &#x27;reserved&#x27; WHERE NOT EXISTS(SELECT 1 FROM dany_sms_log WHERE message_key=?) AND (SELECT COUNT(*) FROM dany_sms_log)&lt;?&quot;).bind(key,event,role,Date.now(),key,smsLimit(env)).run();
+    if(!claimed.meta.changes){const prior=await env.DB.prepare(&quot;SELECT status FROM dany_sms_log WHERE message_key=?&quot;).bind(key).first();return prior?prior.status:&quot;quota_reached&quot;}
+    let status=&quot;unknown&quot;,providerCode=&quot;&quot;;
+    try{
+      const bytes=new TextEncoder().encode(String(env.MOBICA_USER)+&quot;:&quot;+String(env.MOBICA_PASSWORD));
+      const response=await fetch(&quot;https://gate.mobica.bg/v2/multi/json/sms.php&quot;,{method:&quot;POST&quot;,headers:{Authorization:&quot;Basic &quot;+b64(bytes),Accept:&quot;application/json&quot;,&quot;Content-Type&quot;:&quot;application/json&quot;},body:JSON.stringify({sms:[{idd:key,phone,message}]}),signal:AbortSignal.timeout(10000)});
+      const result=await response.json().catch(()=&gt;null);
+      providerCode=String(result?.code||response.status).slice(0,20);
+      status=response.ok&amp;&amp;Number(result?.code)===1004?&quot;accepted&quot;:(result?.code?&quot;rejected&quot;:&quot;unknown&quot;);
+    }catch{status=&quot;unknown&quot;}
+    await env.DB.prepare(&quot;UPDATE dany_sms_log SET status=?,provider_code=? WHERE message_key=?&quot;).bind(status,providerCode,key).run();
+    return status;
+  }catch{console.error(&quot;SMS notification processing failed&quot;);return &quot;unconfirmed&quot;}
+}
+async function notifySms(env,event,booking){
+  if(!smsConfigured(env))return {enabled:false};
+  const clientPhone=smsPhone(booking.phone),adminPhone=smsPhone(env.SMS_ADMIN_PHONE);
+  // The client has priority when only one message remains in the100-message limit.
+  const client=await sendSmsOnce(env,event,booking,&quot;client&quot;,clientPhone);
+  const admin=clientPhone===adminPhone?&quot;same_recipient&quot;:await sendSmsOnce(env,event,booking,&quot;admin&quot;,adminPhone);
+  return {enabled:true,client,admin};
+}
+async function smsOverview(env){
+  await ensureSmsSchema(env.DB);
+  const row=await env.DB.prepare(&quot;SELECT COUNT(*) AS used FROM dany_sms_log&quot;).first();
+  const used=Number(row?.used||0),limit=smsLimit(env);
+  return {enabled:smsConfigured(env),provider:&quot;mobica&quot;,limit,used,remaining:Math.max(0,limit-used)};
+}
+
 async function handle(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get(&quot;CF-Connecting-IP&quot;) || &quot;unknown&quot;;
   if (!env.DB) return err(&quot;\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438&quot;, 503);
-  if (method === &quot;GET&quot; &amp;&amp; path === &quot;/api/schedule&quot;) return json(scheduleInfo);
+  if (method === &quot;GET&quot; &amp;&amp; path === &quot;/api/schedule&quot;) return json({...scheduleInfo,smsVersion:1,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
   if (method === &quot;GET&quot; &amp;&amp; path === &quot;/api/calendar&quot;) {
     await ensureScheduleSchema(env.DB);
     const from = url.searchParams.get(&quot;from&quot;), to = url.searchParams.get(&quot;to&quot;);
@@ -169,7 +230,8 @@ async function handle(request, env) {
 \u0427\u0430\u0441: ${time}
 \u0423\u0441\u043B\u0443\u0433\u0430: ${selected.service}
 Продължителност: ${selected.duration} мин.`, email);
-    return json({ id, emailSent: sent }, 201);
+    const sms=await notifySms(env,&quot;booked&quot;,{id,date,time,phone});
+    return json({ id, emailSent: sent, sms }, 201);
   }
   if (method === &quot;POST&quot; &amp;&amp; path === &quot;/api/home-request&quot;) {
     const fd = await request.formData();
@@ -212,6 +274,7 @@ async function handle(request, env) {
     const token = (request.headers.get(&quot;authorization&quot;) || &quot;&quot;).replace(/^Bearer\s+/i, &quot;&quot;);
     if (!env.SESSION_SECRET || !await verify(token, env.SESSION_SECRET)) return err(&quot;\u041C\u043E\u043B\u044F, \u0432\u043B\u0435\u0437\u0442\u0435 \u043E\u0442\u043D\u043E\u0432\u043E \u0432 \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0441\u043A\u0438\u044F \u043F\u0430\u043D\u0435\u043B.&quot;, 401);
     await ensureScheduleSchema(env.DB);
+    if(method===&quot;GET&quot;&amp;&amp;path===&quot;/api/admin/sms-status&quot;)return json(await smsOverview(env));
     if (method === &quot;GET&quot; &amp;&amp; path === &quot;/api/admin/calendar&quot;) {
       const from = url.searchParams.get(&quot;from&quot;), to = url.searchParams.get(&quot;to&quot;);
       if (!validDate(from) || !validDate(to) || from &gt; to || Date.parse(to) - Date.parse(from) &gt; 35 * 864e5) return err(&quot;\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u043F\u0435\u0440\u0438\u043E\u0434&quot;);
@@ -226,7 +289,7 @@ async function handle(request, env) {
         const reason = safe(b.reason,2000);
         // Delete and return the original booking in one atomic statement. A repeated
         // or concurrent cancellation cannot delete a new booking or send twice.
-        const booking = await env.DB.prepare(&quot;DELETE FROM slots WHERE id=? AND kind=&#x27;booked&#x27; RETURNING date,time,name,phone,email,service,duration_minutes&quot;).bind(safe(b.id,100)).first();
+        const booking = await env.DB.prepare(&quot;DELETE FROM slots WHERE id=? AND kind=&#x27;booked&#x27; RETURNING id,date,time,name,phone,email,service,duration_minutes&quot;).bind(safe(b.id,100)).first();
         if (!booking) return err(&quot;Резервацията вече е отменена или не съществува.&quot;,404);
         let clientEmailStatus = &quot;not_provided&quot;;
         if (booking.email) {
@@ -234,7 +297,8 @@ async function handle(request, env) {
             `Име: ${booking.name || &quot;&quot;}\nДата: ${booking.date}\nЧас: ${booking.time}\nПродължителност: ${durationOf(booking)} мин.\nУслуга: ${booking.service || &quot;&quot;}`,booking.email,[],{reason});
           clientEmailStatus = sent ? &quot;sent&quot; : &quot;failed&quot;;
         }
-        return json({ ok: true, cancelled:true, clientEmailStatus });
+        const sms=await notifySms(env,&quot;cancelled&quot;,booking);
+        return json({ ok: true, cancelled:true, clientEmailStatus, sms });
       }
       if (!validDate(date)) return err(&quot;\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u043D\u0430 \u0434\u0430\u0442\u0430&quot;);
       if (path === &quot;/api/admin/slot&quot;) {
@@ -267,8 +331,10 @@ async function handle(request, env) {
         if(!selected)return err(&quot;Изберете валидна услуга и брой.&quot;);
         if (!validTime(time) || !name) return err(&quot;\u041B\u0438\u043F\u0441\u0432\u0430\u0442 \u0434\u0430\u043D\u043D\u0438&quot;);
         try {
-          if (!await insertBooking(env,date,time,{id:crypto.randomUUID(),name,phone,...selected})) return err(&quot;Този час вече е зает.&quot;,409);
-          return json({ ok: true });
+          const id=crypto.randomUUID();
+          if (!await insertBooking(env,date,time,{id,name,phone,...selected})) return err(&quot;Този час вече е зает.&quot;,409);
+          const sms=await notifySms(env,&quot;booked&quot;,{id,date,time,phone});
+          return json({ ok: true, sms });
         } catch {
           return err(&quot;\u0427\u0430\u0441\u044A\u0442 \u0435 \u0437\u0430\u0435\u0442&quot;, 409);
         }
