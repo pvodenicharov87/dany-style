@@ -1,7 +1,10 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 // src/worker.js
-var TIMES = ["10:00","11:30","13:00","14:30","16:00","17:30"];
+var TIMES = Array.from({length:15},(_,i)=>{const m=600+i*30;return String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0")});
+const SCHEDULE_VERSION = "half-hour-90-v1";
+const LEGACY_TIMES = ["10:00","11:30","13:00","14:30","16:00","17:30"];
+const APPOINTMENT_MINUTES = 90;
 var json =  __name((v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } }), "json");
 var err =  __name((message, status = 400) => json({ error: message }, status), "err");
 var safe =  __name((s, max = 2e3) => String(s ?? "").trim().slice(0, max), "safe");
@@ -83,24 +86,49 @@ async function sendMail(env, subject, body, clientEmail, attachments = []) {
 __name(sendMail, "sendMail");
 
 const minutes = t => Number(t.slice(0,2))*60+Number(t.slice(3));
-const overlaps = (t, row) => {
-  const duration = TIMES.includes(row.time) ? 90 : 60;
-  return minutes(t) < minutes(row.time)+duration && minutes(row.time) < minutes(t)+90;
-};
-const expandSlots = rows => rows.flatMap(row => TIMES.filter(t => overlaps(t,row)).map(time => ({...row, sourceTime:row.time,time})));
-async function slotTaken(env,date,time) {
-  const rows = await env.DB.prepare("SELECT time FROM slots WHERE date=?").bind(date).all();
-  return rows.results.some(row => overlaps(time,row));
+const durationOf = row => Number(row.duration_minutes) > 0 ? Number(row.duration_minutes) : (row.kind === "booked" || LEGACY_TIMES.includes(row.time) ? 90 : 60);
+const overlaps = (time,row,duration=APPOINTMENT_MINUTES) => minutes(time) < minutes(row.time)+durationOf(row) && minutes(row.time) < minutes(time)+duration;
+const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30};
+const expandSlots = rows => rows.flatMap(row => TIMES.filter(time=>overlaps(time,row)).map(time=>({date:row.date,time})));
+const schemaChecks = new WeakMap();
+async function ensureScheduleSchema(db) {
+  if (!schemaChecks.has(db)) schemaChecks.set(db,(async()=>{
+    const columns = await db.prepare("PRAGMA table_info(slots)").all();
+    if (!columns.results.some(c=>c.name === "duration_minutes")) {
+      try { await db.prepare("ALTER TABLE slots ADD COLUMN duration_minutes INTEGER").run(); }
+      catch (e) { // Another Worker isolate may have added the column concurrently.
+        const current = await db.prepare("PRAGMA table_info(slots)").all();
+        if (!current.results.some(c=>c.name === "duration_minutes")) throw e;
+      }
+    }
+  })().catch(e=>{schemaChecks.delete(db);throw e}));
+  await schemaChecks.get(db);
+}
+// The overlap predicate and insertion run in ONE SQLite statement. Different
+// start times therefore cannot race past a separate JavaScript availability check.
+const SQL_MINUTES = "(CAST(substr(time,1,2) AS INTEGER)*60+CAST(substr(time,4,2) AS INTEGER))";
+const SQL_DURATION = "COALESCE(duration_minutes,CASE WHEN kind='booked' OR time IN ('10:00','11:30','13:00','14:30','16:00','17:30') THEN 90 ELSE 60 END)";
+const CONFLICT_SQL = `SELECT 1 FROM slots WHERE date=? AND ${SQL_MINUTES}<? AND ${SQL_MINUTES}+${SQL_DURATION}>?`;
+async function insertBooking(env,date,time,booking) {
+  const result=await env.DB.prepare(`INSERT INTO slots(date,time,kind,id,name,phone,email,service,duration_minutes) SELECT ?,?,'booked',?,?,?,?,?,90 WHERE NOT EXISTS (${CONFLICT_SQL})`)
+    .bind(date,time,booking.id,booking.name,booking.phone||"",booking.email||"",booking.service||"",date,minutes(time)+90,minutes(time)).run();
+  return result.meta.changes === 1;
+}
+function blockStatement(db,date,time) {
+  return db.prepare(`INSERT INTO slots(date,time,kind,duration_minutes) SELECT ?,?,'blocked',30 WHERE NOT EXISTS (${CONFLICT_SQL})`)
+    .bind(date,time,date,minutes(time)+30,minutes(time));
 }
 
 async function handle(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (!env.DB) return err("\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438", 503);
+  if (method === "GET" && path === "/api/schedule") return json(scheduleInfo);
   if (method === "GET" && path === "/api/calendar") {
+    await ensureScheduleSchema(env.DB);
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");
     if (!validDate(from) || !validDate(to) || from > to || Date.parse(to) - Date.parse(from) > 35 * 864e5) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u043F\u0435\u0440\u0438\u043E\u0434");
-    const rows = await env.DB.prepare("SELECT date,time FROM slots WHERE date BETWEEN ? AND ?").bind(from, to).all();
-    return json({ occupied: expandSlots(rows.results).map(({date,time})=>({date,time})) });
+    const rows = await env.DB.prepare("SELECT date,time,kind,duration_minutes FROM slots WHERE date BETWEEN ? AND ?").bind(from, to).all();
+    return json({ ...scheduleInfo, occupied: expandSlots(rows.results) });
   }
   if (method === "POST" && path === "/api/book") {
     const b = await request.json();
@@ -108,8 +136,8 @@ async function handle(request, env) {
     if (!future(date) || !validTime(time) || !name || !phone || !validEmail(email) || b.privacy !== true) return err("\u041F\u0440\u043E\u0432\u0435\u0440\u0435\u0442\u0435 \u043F\u043E\u043F\u044A\u043B\u043D\u0435\u043D\u0438\u0442\u0435 \u0434\u0430\u043D\u043D\u0438 \u0438 \u0441\u044A\u0433\u043B\u0430\u0441\u0438\u0435\u0442\u043E.");
     const id = crypto.randomUUID();
     try {
-      if (await slotTaken(env,date,time)) return err("Този час вече е зает. Моля, изберете друг.",409);
-      await env.DB.prepare("INSERT INTO slots(date,time,kind,id,name,phone,email,service) VALUES(?,?,'booked',?,?,?,?,?)").bind(date, time, id, name, phone, email, service).run();
+      await ensureScheduleSchema(env.DB);
+      if (!await insertBooking(env,date,time,{id,name,phone,email,service})) return err("Този час вече е зает. Моля, изберете друг.",409);
     } catch {
       return err("\u0422\u043E\u0437\u0438 \u0447\u0430\u0441 \u0432\u0435\u0447\u0435 \u0435 \u0437\u0430\u0435\u0442. \u041C\u043E\u043B\u044F, \u0438\u0437\u0431\u0435\u0440\u0435\u0442\u0435 \u0434\u0440\u0443\u0433.", 409);
     }
@@ -162,11 +190,12 @@ async function handle(request, env) {
   if (path.startsWith("/api/admin/")) {
     const token = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
     if (!env.SESSION_SECRET || !await verify(token, env.SESSION_SECRET)) return err("\u041C\u043E\u043B\u044F, \u0432\u043B\u0435\u0437\u0442\u0435 \u043E\u0442\u043D\u043E\u0432\u043E \u0432 \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0441\u043A\u0438\u044F \u043F\u0430\u043D\u0435\u043B.", 401);
+    await ensureScheduleSchema(env.DB);
     if (method === "GET" && path === "/api/admin/calendar") {
       const from = url.searchParams.get("from"), to = url.searchParams.get("to");
       if (!validDate(from) || !validDate(to) || from > to || Date.parse(to) - Date.parse(from) > 35 * 864e5) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u043F\u0435\u0440\u0438\u043E\u0434");
-      const rows = await env.DB.prepare("SELECT date,time,kind,id,name,phone,email,service FROM slots WHERE date BETWEEN ? AND ? ORDER BY date,time").bind(from, to).all();
-      return json({ items: expandSlots(rows.results) });
+      const rows = await env.DB.prepare("SELECT date,time,kind,id,name,phone,email,service,duration_minutes FROM slots WHERE date BETWEEN ? AND ? ORDER BY date,time").bind(from, to).all();
+      return json({ ...scheduleInfo, items: rows.results.map(row=>({...row,duration_minutes:durationOf(row)})), occupied:expandSlots(rows.results) });
     }
     if (method === "POST") {
       const b = await request.json(), date = safe(b.date, 10), time = safe(b.time, 5);
@@ -177,9 +206,10 @@ async function handle(request, env) {
       }
       if (!validDate(date)) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u043D\u0430 \u0434\u0430\u0442\u0430");
       if (path === "/api/admin/slot") {
-        if (!validTime(time) && !(b.action === "unblock" && /^(1[0-7]):00$/.test(time))) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u0447\u0430\u0441");
+        if (!validTime(time) && !(b.action === "unblock" && /^1[0-8]:[03]0$/.test(time))) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u0447\u0430\u0441");
         if (b.action === "block") {
-          await env.DB.prepare("INSERT OR IGNORE INTO slots(date,time,kind) VALUES(?,?,'blocked')").bind(date, time).run();
+          const result = await blockStatement(env.DB,date,time).run();
+          if (!result.meta.changes) return err("Периодът вече е зает. Обновете календара.",409);
           return json({ ok: true });
         }
         if (b.action === "unblock") {
@@ -189,7 +219,7 @@ async function handle(request, env) {
       }
       if (path === "/api/admin/day") {
         if (b.action === "block") {
-          await env.DB.batch(TIMES.map((t) => env.DB.prepare("INSERT OR IGNORE INTO slots(date,time,kind) VALUES(?,?,'blocked')").bind(date, t)));
+          await env.DB.batch(TIMES.map(t=>blockStatement(env.DB,date,t)));
           return json({ ok: true });
         }
         if (b.action === "unblock") {
@@ -201,8 +231,7 @@ async function handle(request, env) {
         const name = safe(b.name, 100), phone = safe(b.phone, 30), service = safe(b.service, 1e3);
         if (!validTime(time) || !name) return err("\u041B\u0438\u043F\u0441\u0432\u0430\u0442 \u0434\u0430\u043D\u043D\u0438");
         try {
-          if (await slotTaken(env,date,time)) return err("Този час вече е зает.",409);
-          await env.DB.prepare("INSERT INTO slots(date,time,kind,id,name,phone,service) VALUES(?,?,'booked',?,?,?,?)").bind(date, time, crypto.randomUUID(), name, phone, service).run();
+          if (!await insertBooking(env,date,time,{id:crypto.randomUUID(),name,phone,service})) return err("Този час вече е зает.",409);
           return json({ ok: true });
         } catch {
           return err("\u0427\u0430\u0441\u044A\u0442 \u0435 \u0437\u0430\u0435\u0442", 409);
@@ -258,3 +287,4 @@ export default {
     return corsResponse(response, origin);
   }
 };
+
