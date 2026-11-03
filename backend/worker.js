@@ -88,7 +88,7 @@ __name(sendMail, "sendMail");
 const minutes = t => Number(t.slice(0,2))*60+Number(t.slice(3));
 const durationOf = row => Number(row.duration_minutes) > 0 ? Number(row.duration_minutes) : (row.kind === "booked" || LEGACY_TIMES.includes(row.time) ? 90 : 60);
 const overlaps = (time,row,duration=APPOINTMENT_MINUTES) => minutes(time) < minutes(row.time)+durationOf(row) && minutes(row.time) < minutes(time)+duration;
-const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30};
+const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90};
 const expandSlots = rows => rows.flatMap(row => TIMES.filter(time=>overlaps(time,row)).map(time=>({date:row.date,time})));
 const schemaChecks = new WeakMap();
 async function ensureScheduleSchema(db) {
@@ -114,9 +114,9 @@ async function insertBooking(env,date,time,booking) {
     .bind(date,time,booking.id,booking.name,booking.phone||"",booking.email||"",booking.service||"",date,minutes(time)+90,minutes(time)).run();
   return result.meta.changes === 1;
 }
-function blockStatement(db,date,time) {
-  return db.prepare(`INSERT INTO slots(date,time,kind,duration_minutes) SELECT ?,?,'blocked',30 WHERE NOT EXISTS (${CONFLICT_SQL})`)
-    .bind(date,time,date,minutes(time)+30,minutes(time));
+function blockStatement(db,date,time,duration=30) {
+  return db.prepare(`INSERT INTO slots(date,time,kind,duration_minutes) SELECT ?,?,'blocked',? WHERE NOT EXISTS (${CONFLICT_SQL})`)
+    .bind(date,time,duration,date,minutes(time)+duration,minutes(time));
 }
 
 async function handle(request, env) {
@@ -208,7 +208,7 @@ async function handle(request, env) {
       if (path === "/api/admin/slot") {
         if (!validTime(time) && !(b.action === "unblock" && /^1[0-8]:[03]0$/.test(time))) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u0447\u0430\u0441");
         if (b.action === "block") {
-          const result = await blockStatement(env.DB,date,time).run();
+          const result = await blockStatement(env.DB,date,time,APPOINTMENT_MINUTES).run();
           if (!result.meta.changes) return err("Периодът вече е зает. Обновете календара.",409);
           return json({ ok: true });
         }

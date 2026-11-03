@@ -1,4 +1,4 @@
-<!doctype html><html lang="bg"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Обновяване на календара – Dany Style</title><style>body{max-width:850px;margin:30px auto;padding:20px;font:18px/1.6 Arial,sans-serif;color:#49313d;background:#fff7fa}button,a{font:inherit}button{padding:14px 20px;border:0;border-radius:14px;background:#a45f7d;color:white;cursor:pointer}textarea{box-sizing:border-box;width:100%;height:240px;padding:14px;margin-top:20px;font:13px/1.45 monospace;border:1px solid #d6acbf;border-radius:12px}#status{padding:15px;border-radius:12px;background:white}a{color:#854765}</style></head><body><h1>Календар през 30 минути</h1><p>Всяка резервация заема 90 минути. Последният начален час е 17:00.</p><ol><li>Натиснете „Копирай целия код“.</li><li>В <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener">Cloudflare</a> отворете Workers &amp; Pages → dany-style → Edit code.</li><li>Заменете целия код в worker.js с копирания и натиснете Deploy.</li><li>Върнете се тук и проверете активирането.</li></ol><button id="copy">Копирай целия код</button> <button id="check">Провери активирането</button><p id="status" role="status">Кодът е готов за копиране.</p><textarea id="code" readonly spellcheck="false" aria-label="Пълен код за Cloudflare Worker">var __defProp = Object.defineProperty;
+<!doctype html><html lang="bg"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Обновяване на календара – Dany Style</title><style>body{max-width:850px;margin:30px auto;padding:20px;font:18px/1.6 Arial,sans-serif;color:#49313d;background:#fff7fa}button,a{font:inherit}button{padding:14px 20px;border:0;border-radius:14px;background:#a45f7d;color:white;cursor:pointer}textarea{box-sizing:border-box;width:100%;height:240px;padding:14px;margin-top:20px;font:13px/1.45 monospace;border:1px solid #d6acbf;border-radius:12px}#status{padding:15px;border-radius:12px;background:white}a{color:#854765}</style></head><body><h1>Календар през 30 минути</h1><p>Всяка резервация и клик за блокиране в админа заема 90 минути. Последният начален час е 17:00.</p><ol><li>Натиснете „Копирай целия код“.</li><li>В <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener">Cloudflare</a> отворете Workers &amp; Pages → dany-style → Edit code.</li><li>Заменете целия код в worker.js с копирания и натиснете Deploy.</li><li>Върнете се тук и проверете активирането.</li></ol><button id="copy">Копирай целия код</button> <button id="check">Провери активирането</button><p id="status" role="status">Кодът е готов за копиране.</p><textarea id="code" readonly spellcheck="false" aria-label="Пълен код за Cloudflare Worker">var __defProp = Object.defineProperty;
 var __name = (target, value) =&gt; __defProp(target, &quot;name&quot;, { value, configurable: true });
 // src/worker.js
 var TIMES = Array.from({length:15},(_,i)=&gt;{const m=600+i*30;return String(Math.floor(m/60)).padStart(2,&quot;0&quot;)+&quot;:&quot;+String(m%60).padStart(2,&quot;0&quot;)});
@@ -88,7 +88,7 @@ __name(sendMail, &quot;sendMail&quot;);
 const minutes = t =&gt; Number(t.slice(0,2))*60+Number(t.slice(3));
 const durationOf = row =&gt; Number(row.duration_minutes) &gt; 0 ? Number(row.duration_minutes) : (row.kind === &quot;booked&quot; || LEGACY_TIMES.includes(row.time) ? 90 : 60);
 const overlaps = (time,row,duration=APPOINTMENT_MINUTES) =&gt; minutes(time) &lt; minutes(row.time)+durationOf(row) &amp;&amp; minutes(row.time) &lt; minutes(time)+duration;
-const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30};
+const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90};
 const expandSlots = rows =&gt; rows.flatMap(row =&gt; TIMES.filter(time=&gt;overlaps(time,row)).map(time=&gt;({date:row.date,time})));
 const schemaChecks = new WeakMap();
 async function ensureScheduleSchema(db) {
@@ -114,9 +114,9 @@ async function insertBooking(env,date,time,booking) {
     .bind(date,time,booking.id,booking.name,booking.phone||&quot;&quot;,booking.email||&quot;&quot;,booking.service||&quot;&quot;,date,minutes(time)+90,minutes(time)).run();
   return result.meta.changes === 1;
 }
-function blockStatement(db,date,time) {
-  return db.prepare(`INSERT INTO slots(date,time,kind,duration_minutes) SELECT ?,?,&#x27;blocked&#x27;,30 WHERE NOT EXISTS (${CONFLICT_SQL})`)
-    .bind(date,time,date,minutes(time)+30,minutes(time));
+function blockStatement(db,date,time,duration=30) {
+  return db.prepare(`INSERT INTO slots(date,time,kind,duration_minutes) SELECT ?,?,&#x27;blocked&#x27;,? WHERE NOT EXISTS (${CONFLICT_SQL})`)
+    .bind(date,time,duration,date,minutes(time)+duration,minutes(time));
 }
 
 async function handle(request, env) {
@@ -208,7 +208,7 @@ async function handle(request, env) {
       if (path === &quot;/api/admin/slot&quot;) {
         if (!validTime(time) &amp;&amp; !(b.action === &quot;unblock&quot; &amp;&amp; /^1[0-8]:[03]0$/.test(time))) return err(&quot;\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u0447\u0430\u0441&quot;);
         if (b.action === &quot;block&quot;) {
-          const result = await blockStatement(env.DB,date,time).run();
+          const result = await blockStatement(env.DB,date,time,APPOINTMENT_MINUTES).run();
           if (!result.meta.changes) return err(&quot;Периодът вече е зает. Обновете календара.&quot;,409);
           return json({ ok: true });
         }
@@ -288,4 +288,4 @@ export default {
   }
 };
 
-</textarea><p><a href="https://www.dany.style/preview-mobile-seo.html">Клиентски календар</a> · <a href="https://www.dany.style/preview-mobile-admin-seo.html">Админ панел</a></p><script>const box=document.getElementById('code'),status=document.getElementById('status');document.getElementById('copy').onclick=async()=>{try{await navigator.clipboard.writeText(box.value);status.textContent='Целият код е копиран. Поставете го в Cloudflare и натиснете Deploy.'}catch{box.focus();box.select();status.textContent=document.execCommand('copy')?'Кодът е копиран.':'Кодът е избран. Копирайте го от менюто.'}};document.getElementById('check').onclick=async()=>{status.textContent='Проверка…';try{const date=new Date().toISOString().slice(0,10),r=await fetch('https://dany-style.danystyle.workers.dev/api/calendar?from='+date+'&to='+date),j=await r.json();if(!r.ok)throw Error(j.error||'Грешка при проверка');status.textContent=j.scheduleVersion==='half-hour-90-v1'?'✓ Активирано: часове през 30 минути и резервации за 90 минути. Обновете сайта и админ панела.':'Все още работи предишната версия. Поставете новия код в Cloudflare и натиснете Deploy.'}catch(e){status.textContent='Проверката не завърши: '+e.message}};</script></body></html>
+</textarea><p><a href="https://www.dany.style/preview-mobile-seo.html">Клиентски календар</a> · <a href="https://www.dany.style/preview-mobile-admin-seo.html">Админ панел</a></p><script>const box=document.getElementById('code'),status=document.getElementById('status');document.getElementById('copy').onclick=async()=>{try{await navigator.clipboard.writeText(box.value);status.textContent='Целият код е копиран. Поставете го в Cloudflare и натиснете Deploy.'}catch{box.focus();box.select();status.textContent=document.execCommand('copy')?'Кодът е копиран.':'Кодът е избран. Копирайте го от менюто.'}};document.getElementById('check').onclick=async()=>{status.textContent='Проверка…';try{const date=new Date().toISOString().slice(0,10),r=await fetch('https://dany-style.danystyle.workers.dev/api/calendar?from='+date+'&to='+date),j=await r.json();if(!r.ok)throw Error(j.error||'Грешка при проверка');status.textContent=j.scheduleVersion==='half-hour-90-v1'&&j.adminBlockMinutes===90?'✓ Активирано: часове през 30 минути; резервациите и блокирането от админа са за 90 минути. Обновете сайта и админ панела.':'Все още работи предишната версия. Поставете новия код в Cloudflare и натиснете Deploy.'}catch(e){status.textContent='Проверката не завърши: '+e.message}};</script></body></html>

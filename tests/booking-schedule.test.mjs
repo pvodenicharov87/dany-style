@@ -33,10 +33,10 @@ for(const t of ['10:00','10:30','11:30','12:00'])assert.equal((await book(e,t)).
 assert.equal((await book(e,'12:30')).status,201);
 e=env();const race=await Promise.all([book(e,'10:00'),book(e,'10:30',true)]);assert.equal(race.filter(x=>[200,201].includes(x.status)).length,1);assert.equal(race.filter(x=>x.status===409).length,1);
 e=env();assert.equal((await call(e,'/api/admin/slot',{date,time:'10:30',action:'block'},true)).status,200);
-o=occupied(await calendar(e));assert(o.has('10:00'));assert(o.has('10:30'));assert(!o.has('11:00'));
-let rows=(await adminCalendar(e)).data.items;assert.equal(rows[0].duration_minutes,30);
-assert.equal((await book(e,'10:00')).status,409);assert.equal((await book(e,'11:00')).status,201);
-assert.equal((await call(e,'/api/admin/slot',{date,time:'11:30',action:'block'},true)).status,409);
+o=occupied(await calendar(e));assert(o.has('10:00'));assert(o.has('10:30'));assert(o.has('11:00'));assert(o.has('11:30'));assert(!o.has('12:00'));
+let rows=(await adminCalendar(e)).data.items;assert.equal(rows[0].duration_minutes,90);
+assert.equal((await book(e,'10:00')).status,409);assert.equal((await book(e,'11:00')).status,409);assert.equal((await book(e,'12:00')).status,201);
+assert.equal((await call(e,'/api/admin/slot',{date,time:'12:30',action:'block'},true)).status,409);
 assert.equal((await call(e,'/api/admin/slot',{date,time:'10:30',action:'unblock'},true)).status,200);
 assert.equal((await call(e,'/api/admin/day',{date,action:'block'},true)).status,200);
 assert.equal(occupied(await calendar(e)).size,15);
@@ -44,6 +44,18 @@ rows=(await adminCalendar(e)).data.items;assert.equal(rows.filter(x=>x.kind==='b
 assert.equal((await call(e,'/api/admin/day',{date,action:'unblock'},true)).status,200);
 rows=(await adminCalendar(e)).data.items;assert.equal(rows.length,1);assert.equal(rows[0].kind,'booked');
 assert.equal((await call(e,'/api/admin/cancel',{id:rows[0].id},true)).status,200);assert.equal(occupied(await calendar(e)).size,0);
+// Regression: admin clicking 13:00 or 14:00 must block the FULL forward interval.
+for(const start of ['13:00','14:00']){
+ const a=env();assert.equal((await call(a,'/api/admin/slot',{date,time:start,action:'block'},true)).status,200);
+ const startMinutes=Number(start.slice(0,2))*60;
+ const t=m=>String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+ const unavailable=occupied(await calendar(a));
+ for(const delta of [-60,-30,0,30,60])assert(unavailable.has(t(startMinutes+delta)),start+' delta '+delta);
+ assert(!unavailable.has(t(startMinutes-90)));assert(!unavailable.has(t(startMinutes+90)));
+ assert.equal((await book(a,t(startMinutes+30))).status,409);
+ assert.equal((await book(a,t(startMinutes+90))).status,201);
+ assert.equal((await adminCalendar(a)).data.adminBlockMinutes,90);
+}
 // Existing reservations, including the previous 17:30 last start, survive migration.
 e=env();e.DB.sql.prepare("INSERT INTO slots(date,time,kind,id,name) VALUES(?,?,'booked','legacy','Existing')").run(date,'17:30');
 r=await adminCalendar(e);assert.equal(r.data.items[0].id,'legacy');assert.equal(r.data.items[0].time,'17:30');assert.equal(r.data.items[0].duration_minutes,90);
@@ -60,4 +72,4 @@ for(const path of ['index.html','en/index.html','admin.html']){
  for(const m of source.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g))if(!m[1].includes('application/ld+json'))new Function(m[2]);
  assert(source.includes('half-hour-90-v1'));assert(source.includes('legacyTimes'));
 }
-console.log('PASS: 15 half-hour starts; 90-minute intervals; both overlap directions; exact boundaries; concurrent public/admin bookings; 30-minute blocks; day block/unblock/cancel; legacy migration; last start 17:00; auth; public privacy; inline scripts and rollout fallback.');
+console.log('PASS: 15 half-hour starts; 90-minute intervals; both overlap directions; exact boundaries; concurrent public/admin bookings; 90-minute admin-click blocks; 30-minute whole-day segments; day block/unblock/cancel; legacy migration; last start 17:00; auth; public privacy; inline scripts and rollout fallback.');
