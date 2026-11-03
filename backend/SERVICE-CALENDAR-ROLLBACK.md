@@ -12,3 +12,5 @@ Rollback: restore changed frontend files from the preserved commit and manually 
 Services (minutes): ingrown30/60; onycholysis30/60; thickened40/80; fungal40/60; hyperkeratosis30/60; NiTi30; gel polish90; natural gel150; extensions165. Starts10:00–17:00 every30min; no end-time cap. Whole intervals must fit. Public availability exposes no client details. Server owns duration and atomic conflict checking; no client-supplied duration is trusted for bookings. Legacy clients without serviceId continue90min bookings for safe rollout.
 
 Checks: node tests/booking-schedule.test.mjs; node tests/booking-ui.test.mjs.
+
+Live activation check before deployment: /api/schedule still reports half-hour-90-v1 with no adminBlockMinutes capability. This matches the earlier6574e4823355ef3e92e3656fea5a6a3c3929aab6 Worker generation. Its source is additionally preserved in worker-previous-deployment.txt. The later e7c7 Worker source is preserved separately in worker-before-service-durations.txt; its90min admin correction had not been observed active. To reproduce the prior live behavior, deploy worker-previous-deployment.txt.
