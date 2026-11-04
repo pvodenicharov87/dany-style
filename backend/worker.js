@@ -191,7 +191,9 @@ async function notifySms(env,event,booking){
   // The client has priority when only one message remains in the100-message limit.
   const client=await sendSmsOnce(env,event,booking,"client",clientPhone);
   const admin=event==="cancelled"?"not_required":clientPhone===adminPhone?"same_recipient":await sendSmsOnce(env,event,booking,"admin",adminPhone);
-  return {enabled:true,client,admin};
+  const extraPhone=smsPhone(env.SMS_ADMIN_PHONE_EXTRA);
+  const adminExtra=event==="cancelled"?"not_required":!extraPhone?"not_configured":extraPhone===clientPhone||extraPhone===adminPhone?"same_recipient":await sendSmsOnce(env,event,booking,"admin_extra",extraPhone);
+  return {enabled:true,client,admin,adminExtra};
 }
 async function smsOverview(env){
   await ensureSmsSchema(env.DB);
@@ -203,7 +205,7 @@ async function smsOverview(env){
 async function handle(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (!env.DB) return err("\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438", 503);
-  if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:2,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
+  if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:3,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
   if (method === "GET" && path === "/api/calendar") {
     await ensureScheduleSchema(env.DB);
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");

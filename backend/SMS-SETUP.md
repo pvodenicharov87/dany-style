@@ -27,3 +27,6 @@ Tests: node tests/booking-sms.test.mjs; node tests/booking-schedule.test.mjs; no
 
 ## Version 2
 Booking: client and Daniela. Home request: client and Daniela after successful email; this does not confirm an appointment. Cancellation: client only. Bulgarian and Belgian mobiles supported. Identical home requests within a UTC day share an SMS key. The 100-attempt cap includes failed and unknown attempts, is not monthly, and never automatically resets. Keep SMS_ENABLED=false until deployment and controlled testing.
+
+## Version 3: temporary second administrator
+SMS_ADMIN_PHONE=359897001475 (Daniela); SMS_ADMIN_PHONE_EXTRA=32471387908 (Petko). Booking/home requests send to client and both administrators; cancellation sends only to client. Identical phones are deduplicated. Existing SMS_MAX_MESSAGES=100 is a lifetime attempt cap including tests and failures, not a monthly reset. Existing failed notifications are not resent on top-up.
