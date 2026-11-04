@@ -63,3 +63,5 @@ for(const quantity of [1,2]){
  assert.equal(choice(r,'11:30','hyperkeratosis').length,0);assert.equal(choice(r,quantity===1?'12:00':'12:30','hyperkeratosis').length,2);
 }
 console.log('PASS regression: admin hyperkeratosis11:30 stores forward30/60min; earlier30min starts remain bookable.');
+
+const metadataEnv=env();await book(metadataEnv,'10:00','ingrown',1,false,{source:'admin',created_at:1});await book(metadataEnv,'12:00','ingrown',1,true,{source:'website',created_at:1});const metadataRows=(await adminCalendar(metadataEnv)).data.items;assert.equal(metadataRows[0].source,'website');assert.equal(metadataRows[1].source,'admin');assert(metadataRows.every(x=>x.created_at>1));const publicRows=await calendar(metadataEnv);assert(!JSON.stringify(publicRows.data).includes('created_at'));assert(!JSON.stringify(publicRows.data).includes('source'));console.log('PASS: server-owned creation timestamp/source, forged metadata ignored, admin-only visibility.');

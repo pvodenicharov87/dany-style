@@ -90,17 +90,16 @@ __name(sendMail, "sendMail");
 const minutes = t => Number(t.slice(0,2))*60+Number(t.slice(3));
 const durationOf = row => Number(row.duration_minutes) > 0 ? Number(row.duration_minutes) : (row.kind === "booked" || LEGACY_TIMES.includes(row.time) ? 90 : 60);
 const overlaps = (time,row,duration=APPOINTMENT_MINUTES) => minutes(time) < minutes(row.time)+durationOf(row) && minutes(row.time) < minutes(time)+duration;
-const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90,services:SERVICES,cancellationEmailVersion:1};
+const scheduleInfo = {scheduleVersion:SCHEDULE_VERSION,times:TIMES,appointmentMinutes:APPOINTMENT_MINUTES,stepMinutes:30,adminBlockMinutes:90,services:SERVICES,cancellationEmailVersion:1,bookingDetailsVersion:1};
 const expandSlots = rows => rows.flatMap(row => TIMES.filter(time=>overlaps(time,row,30)).map(time=>({date:row.date,time})));
 const schemaChecks = new WeakMap();
 async function ensureScheduleSchema(db) {
   if (!schemaChecks.has(db)) schemaChecks.set(db,(async()=>{
     const columns = await db.prepare("PRAGMA table_info(slots)").all();
-    if (!columns.results.some(c=>c.name === "duration_minutes")) {
-      try { await db.prepare("ALTER TABLE slots ADD COLUMN duration_minutes INTEGER").run(); }
-      catch (e) { // Another Worker isolate may have added the column concurrently.
-        const current = await db.prepare("PRAGMA table_info(slots)").all();
-        if (!current.results.some(c=>c.name === "duration_minutes")) throw e;
+    for(const [name,type] of [['duration_minutes','INTEGER'],['created_at','INTEGER'],['source','TEXT']]){
+      if(!columns.results.some(c=>c.name===name)){
+        try{await db.prepare('ALTER TABLE slots ADD COLUMN '+name+' '+type).run()}
+        catch(e){const current=await db.prepare('PRAGMA table_info(slots)').all();if(!current.results.some(c=>c.name===name))throw e}
       }
     }
   })().catch(e=>{schemaChecks.delete(db);throw e}));
@@ -112,8 +111,8 @@ const SQL_MINUTES = "(CAST(substr(time,1,2) AS INTEGER)*60+CAST(substr(time,4,2)
 const SQL_DURATION = "COALESCE(duration_minutes,CASE WHEN kind='booked' OR time IN ('10:00','11:30','13:00','14:30','16:00','17:30') THEN 90 ELSE 60 END)";
 const CONFLICT_SQL = `SELECT 1 FROM slots WHERE date=? AND ${SQL_MINUTES}<? AND ${SQL_MINUTES}+${SQL_DURATION}>?`;
 async function insertBooking(env,date,time,booking) {
-  const result=await env.DB.prepare(`INSERT INTO slots(date,time,kind,id,name,phone,email,service,duration_minutes) SELECT ?,?,'booked',?,?,?,?,?,? WHERE NOT EXISTS (${CONFLICT_SQL})`)
-    .bind(date,time,booking.id,booking.name,booking.phone||"",booking.email||"",booking.service||"",booking.duration||90,date,minutes(time)+(booking.duration||90),minutes(time)).run();
+  const result=await env.DB.prepare(`INSERT INTO slots(date,time,kind,id,name,phone,email,service,duration_minutes,created_at,source) SELECT ?,?,'booked',?,?,?,?,?,?,?,? WHERE NOT EXISTS (${CONFLICT_SQL})`)
+    .bind(date,time,booking.id,booking.name,booking.phone||"",booking.email||"",booking.service||"",booking.duration||90,Date.now(),booking.source||"website",date,minutes(time)+(booking.duration||90),minutes(time)).run();
   return result.meta.changes === 1;
 }
 function selection(b) {
@@ -286,7 +285,7 @@ async function handle(request, env) {
     if (method === "GET" && path === "/api/admin/calendar") {
       const from = url.searchParams.get("from"), to = url.searchParams.get("to");
       if (!validDate(from) || !validDate(to) || from > to || Date.parse(to) - Date.parse(from) > 35 * 864e5) return err("\u041D\u0435\u0432\u0430\u043B\u0438\u0434\u0435\u043D \u043F\u0435\u0440\u0438\u043E\u0434");
-      const rows = await env.DB.prepare("SELECT date,time,kind,id,name,phone,email,service,duration_minutes FROM slots WHERE date BETWEEN ? AND ? ORDER BY date,time").bind(from, to).all();
+      const rows = await env.DB.prepare("SELECT date,time,kind,id,name,phone,email,service,duration_minutes,created_at,source FROM slots WHERE date BETWEEN ? AND ? ORDER BY date,time").bind(from, to).all();
       return json({ ...scheduleInfo, items: rows.results.map(row=>({...row,duration_minutes:durationOf(row)})), occupied:expandSlots(rows.results) });
     }
     if (method === "POST") {
@@ -340,7 +339,7 @@ async function handle(request, env) {
         if (!validTime(time) || !name) return err("\u041B\u0438\u043F\u0441\u0432\u0430\u0442 \u0434\u0430\u043D\u043D\u0438");
         try {
           const id=crypto.randomUUID();
-          if (!await insertBooking(env,date,time,{id,name,phone,...selected})) return err("Този час вече е зает.",409);
+          if (!await insertBooking(env,date,time,{id,name,phone,...selected,source:"admin"})) return err("Този час вече е зает.",409);
           const sms=await notifySms(env,"booked",{id,date,time,phone});
           return json({ ok: true, sms });
         } catch {

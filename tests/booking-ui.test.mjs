@@ -62,7 +62,7 @@ console.log('PASS regression: grid click selects exact11:30 without manual block
 
 for(const status of ['sent','failed','not_provided']){
  const panel=await boot('admin.html');panel.data.cancelStatus=status;
- await panel.get('calendar').children.find(x=>x.textContent===now.getDate()).onclick();const cancel=panel.get('items').children[0].children[0];cancel.onclick();
+ await panel.get('calendar').children.find(x=>x.textContent===now.getDate()).onclick();const cancel=panel.get('items').children[0].children[1];cancel.onclick();
  assert(panel.get('cancelDialog').open);assert(!panel.calls.some(x=>x.url.endsWith('/api/admin/cancel')));panel.get('cancelReason').value='Налага се промяна.';
  await panel.get('cancelForm').onsubmit({preventDefault(){}});assert(!panel.get('cancelDialog').open);
  const body=JSON.parse(panel.calls.find(x=>x.url.endsWith('/api/admin/cancel')).options.body);assert.equal(body.id,'one');assert.equal(body.reason,'Налага се промяна.');
@@ -70,4 +70,6 @@ for(const status of ['sent','failed','not_provided']){
 }
 console.log('PASS: cancellation dialog requires confirmation, submits optional reason and displays separate sent/failed/no-email statuses.');
 
-const pendingWorker=await boot('admin.html','service-duration-v1','11:00',0);await pendingWorker.get('calendar').children.find(x=>x.textContent===now.getDate()).onclick();pendingWorker.get('items').children[0].children[0].onclick();assert(pendingWorker.get('confirmCancellation').disabled);await pendingWorker.get('cancelForm').onsubmit({preventDefault(){}});assert(!pendingWorker.calls.some(x=>x.url.endsWith('/api/admin/cancel')));pendingWorker.get('cancelBack').onclick();assert(!pendingWorker.get('cancelDialog').open);console.log('PASS: old Worker capability gate prevents unnotified cancellation; Back closes without deleting.');
+const pendingWorker=await boot('admin.html','service-duration-v1','11:00',0);await pendingWorker.get('calendar').children.find(x=>x.textContent===now.getDate()).onclick();pendingWorker.get('items').children[0].children[1].onclick();assert(pendingWorker.get('confirmCancellation').disabled);await pendingWorker.get('cancelForm').onsubmit({preventDefault(){}});assert(!pendingWorker.calls.some(x=>x.url.endsWith('/api/admin/cancel')));pendingWorker.get('cancelBack').onclick();assert(!pendingWorker.get('cancelDialog').open);console.log('PASS: old Worker capability gate prevents unnotified cancellation; Back closes without deleting.');
+
+const detailsPanel=await boot('admin.html');await detailsPanel.get('calendar').children.find(x=>x.textContent===now.getDate()).onclick();const detail=detailsPanel.get('items').children[0].children[0];assert.equal(detail.className,'booking-details');const fields=detail.children[1].children;assert(fields.some(x=>x.textContent==='Имейл'));assert(fields.some(x=>x.textContent==='Телефон'));assert(fields.some(x=>x.textContent==='Не е попълнено'));assert(fields.some(x=>x.textContent==='Няма данни за този запис'));assert(!detailsPanel.calls.some(x=>x.url.endsWith('/api/admin/cancel')));console.log('PASS: expandable booking details, explicit missing contact/legacy metadata, separate cancellation action.');
