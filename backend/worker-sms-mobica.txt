@@ -145,7 +145,8 @@ function smsPhone(value) {
   if(phone.startsWith("00"))phone=phone.slice(2);
   if(/^0[789]\d{8}$/.test(phone))phone="359"+phone.slice(1);
   if(/^3590[789]\d{8}$/.test(phone))phone="359"+phone.slice(4);
-  return /^359(?:87|88|89|98|99)\d{7}$/.test(phone)?phone:null;
+  if(/^3204\d{8}$/.test(phone))phone="32"+phone.slice(3);
+  return /^(?:359(?:87|88|89|98|99)\d{7}|324\d{8})$/.test(phone)?phone:null;
 }
 const smsLimit=env=>{const n=Number(env.SMS_MAX_MESSAGES||100);return Number.isInteger(n)&&n>=1&&n<=10000?n:100};
 const smsConfigured=env=>env.SMS_ENABLED==="true"&&Boolean(env.MOBICA_USER)&&Boolean(env.MOBICA_PASSWORD)&&Boolean(smsPhone(env.SMS_ADMIN_PHONE));
@@ -155,13 +156,14 @@ async function ensureSmsSchema(db){
   await smsSchema.get(db);
 }
 function smsMessage(event,booking,role){
+  if(event==="request")return role==="client"?"Dany Style: Получихме заявката Ви. Ще се свържем с Вас.":"Dany Style: Нова заявка. Проверете имейла си.";
   const date=String(booking.date).split("-").reverse().join("."),when=date+", "+booking.time;
   if(role==="client")return event==="booked"?"Dany Style: Часът Ви е запазен за "+when+".":"Dany Style: Часът Ви на "+when+" е отменен.";
   const phone=smsPhone(booking.phone),contact=phone?"0"+phone.slice(3):"няма";
   return event==="booked"?"Dany Style: Нов час "+when+". Тел. "+contact:"Dany Style: Отменен час "+when+".";
 }
 async function sendSmsOnce(env,event,booking,role,phone){
-  if(!phone)return "no_bg_mobile";
+  if(!phone)return "unsupported_phone";
   const message=smsMessage(event,booking,role);
   // Mobica documents67 Unicode characters per part. Never allow a paid second part.
   if(message.length>67)return "too_long";
@@ -188,7 +190,7 @@ async function notifySms(env,event,booking){
   const clientPhone=smsPhone(booking.phone),adminPhone=smsPhone(env.SMS_ADMIN_PHONE);
   // The client has priority when only one message remains in the100-message limit.
   const client=await sendSmsOnce(env,event,booking,"client",clientPhone);
-  const admin=clientPhone===adminPhone?"same_recipient":await sendSmsOnce(env,event,booking,"admin",adminPhone);
+  const admin=event==="cancelled"?"not_required":clientPhone===adminPhone?"same_recipient":await sendSmsOnce(env,event,booking,"admin",adminPhone);
   return {enabled:true,client,admin};
 }
 async function smsOverview(env){
@@ -201,7 +203,7 @@ async function smsOverview(env){
 async function handle(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (!env.DB) return err("\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438", 503);
-  if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:1,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
+  if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:2,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
   if (method === "GET" && path === "/api/calendar") {
     await ensureScheduleSchema(env.DB);
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");
@@ -255,7 +257,11 @@ async function handle(request, env) {
 \u041E\u043F\u0438\u0441\u0430\u043D\u0438\u0435: ${details}
 \u0421\u043D\u0438\u043C\u043A\u0438: ${attachments.length}`, email, attachments);
     if (!sent) return err("\u041D\u0435\u0443\u0441\u043F\u0435\u0448\u043D\u043E \u0438\u0437\u043F\u0440\u0430\u0449\u0430\u043D\u0435. \u041E\u043F\u0438\u0442\u0430\u0439\u0442\u0435 \u043E\u0442\u043D\u043E\u0432\u043E.", 503);
-    return json({ ok: true });
+    // Same request data within a day shares a key: retries cannot spend SMS twice.
+    const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify([name,smsPhone(phone)||phone,email,address,date,details,new Date().toISOString().slice(0,10)])));
+    const id="request-"+Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,"0")).join("");
+    const sms=await notifySms(env,"request",{id,date,phone});
+    return json({ ok: true, sms });
   }
   if (path === "/api/admin/login" && method === "POST") {
     const attempt = await env.DB.prepare("SELECT failures,last_failure FROM login_attempts WHERE ip=?").bind(ip).first();

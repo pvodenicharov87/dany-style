@@ -23,3 +23,7 @@ Provider docs: https://mobica.bg/en/docs/v2/api-application-programming-interfac
 Pricing: https://mobica.bg/bg/prices
 
 Tests: node tests/booking-sms.test.mjs; node tests/booking-schedule.test.mjs; node tests/booking-cancellation.test.mjs.
+
+
+## Version 2
+Booking: client and Daniela. Home request: client and Daniela after successful email; this does not confirm an appointment. Cancellation: client only. Bulgarian and Belgian mobiles supported. Identical home requests within a UTC day share an SMS key. The 100-attempt cap includes failed and unknown attempts, is not monthly, and never automatically resets. Keep SMS_ENABLED=false until deployment and controlled testing.
