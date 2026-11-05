@@ -257,12 +257,20 @@ async function recordLinkedVisit(env,body,geo,day){
  await env.DB.prepare('DELETE FROM site_visit_events WHERE at<?').bind(now-30*864e5).run();
  await env.DB.prepare('DELETE FROM site_visits WHERE last_seen<?').bind(now-30*864e5).run();return true;
 }
+async function visitPeriodSummary(db,from,to,total){
+ const recorded=await db.prepare('SELECT COUNT(*) AS total FROM site_visits WHERE day BETWEEN ? AND ?').bind(from,to).first();
+ const timed=await db.prepare('SELECT COUNT(DISTINCT p.visit_id) AS visits,COALESCE(SUM(p.active_ms),0) AS activeMs FROM site_visit_pages p JOIN site_visits v ON p.visit_id=v.id WHERE v.day BETWEEN ? AND ?').bind(from,to).first();
+ const pages=(await db.prepare("SELECT CASE WHEN e.page='/index.html' THEN '/' ELSE e.page END AS page,COUNT(*) AS views FROM site_visit_events e JOIN site_visits v ON e.visit_id=v.id WHERE v.day BETWEEN ? AND ? AND e.event='pageview' GROUP BY CASE WHEN e.page='/index.html' THEN '/' ELSE e.page END ORDER BY MIN(e.at),page").bind(from,to).all()).results;
+ const group=async key=>(await db.prepare('SELECT '+key+' AS label,COUNT(*) AS total FROM site_visits WHERE day BETWEEN ? AND ? GROUP BY '+key+' ORDER BY total DESC,label').bind(from,to).all()).results;
+ return {summaryVersion:1,pages,activeMs:Number(timed?.visits||0)?Number(timed.activeMs):null,timedVisits:Number(timed?.visits||0),recordedVisits:Number(recorded?.total||0),partial:Number(recorded?.total||0)<total||Number(timed?.visits||0)<Number(recorded?.total||0),sources:await group('referrer'),countries:await group('country'),cities:await group('city')};
+}
 async function visitReport(url,env){
  const from=url.searchParams.get('from'),to=url.searchParams.get('to');if(!validDate(from)||!validDate(to)||from>to||Date.parse(to)-Date.parse(from)>366*864e5)return err('Изберете валиден период до 367 дни.');
  await ensureVisits(env.DB);
  const count=await env.DB.prepare('SELECT COALESCE(SUM(total),0) AS total FROM site_visit_daily WHERE day BETWEEN ? AND ?').bind(from,to).first();
  const visits=(await env.DB.prepare('SELECT v.*, (SELECT COUNT(*) FROM site_visit_events e WHERE e.visit_id=v.id AND e.event=\'pageview\') AS pageviews FROM site_visits v WHERE day BETWEEN ? AND ? ORDER BY started_at DESC LIMIT 100').bind(from,to).all()).results;
- return json({visitVersion:3,measurement:'tab-visits',visits:Number(count?.total||0),items:visits,shown:visits.length,retentionDays:30,inactivityMinutes:null,timeZone:'Europe/Sofia'});
+ const summary=await visitPeriodSummary(env.DB,from,to,Number(count?.total||0));
+ return json({summary,visitVersion:3,measurement:'tab-visits',visits:Number(count?.total||0),items:visits,shown:visits.length,retentionDays:30,inactivityMinutes:null,timeZone:'Europe/Sofia'});
 }
 async function visitDetails(url,env){
  const id=url.searchParams.get('id');if(!/^[-a-f0-9]{36}$/.test(id||''))return err('Невалидно посещение.');await ensureVisits(env.DB);
@@ -298,7 +306,7 @@ async function handle(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (!env.DB) return err("\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438", 503);
   if(method==="POST"&&path==="/api/analytics/event")return collectAnalytics(request,env);
-  if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:3,analyticsVisitVersion:4,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
+  if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:3,analyticsVisitVersion:5,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
   if (method === "GET" && path === "/api/calendar") {
     await ensureScheduleSchema(env.DB);
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");

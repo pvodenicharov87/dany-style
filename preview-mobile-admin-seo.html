@@ -68,9 +68,15 @@ const visitPageNames={"/": "Начало", "/index.html": "Начало", "/za-d
 function visitPageName(path){return !path||path==='Няма данни'?'Няма данни':visitPageNames[path]||'Друга страница'}
 function visitDuration(ms){const seconds=Math.floor(Number(ms||0)/1000);return Math.floor(seconds/60)+' мин. '+seconds%60+' сек.'}
 function visitTable(headers,rows){const table=document.createElement('table');table.className='visit-data';const head=document.createElement('thead'),hr=document.createElement('tr');for(const text of headers){const th=document.createElement('th');th.scope='col';th.textContent=text;hr.append(th)}head.append(hr);table.append(head);const body=document.createElement('tbody');for(const row of rows){const tr=document.createElement('tr');for(const value of row){const td=document.createElement('td');td.textContent=value;tr.append(td)}body.append(tr)}table.append(body);return table}
+function visitCountry(code){try{return /^[A-Z]{2}$/.test(code||'')?new Intl.DisplayNames(['bg'],{type:'region'}).of(code):code||'Неизвестно'}catch{return code||'Неизвестно'}}
+function visitSection(title,headers,rows){const section=document.createElement('details'),summary=document.createElement('summary');summary.textContent=title;section.className='visit-section';section.append(summary,visitTable(headers,rows));return section}
+function renderVisitSummary(data,from,to){const box=$('statsResults');box.replaceChildren();const s=data.summary;if(!s){box.textContent='За общата справка е нужен обновеният Worker v5.';return}const heading=document.createElement('h3');heading.textContent='Общо за периода';box.append(heading,visitTable(['Показател','Стойност'],[['Период',from+' — '+to],['Посетени страници',String(s.pages.length)],['Общо активно време ≈'+(s.partial?' (налични данни)':''),s.activeMs===null?'Няма данни':visitDuration(s.activeMs)]]));
+ box.append(visitSection('Посетени страници',['Страница','Отваряния'],s.pages.map(p=>[visitPageName(p.page),String(p.views)])));
+ for(const [title,key,format]of [['Източници','sources',visitSource],['Държави','countries',visitCountry],['Градове (приблизително)','cities',v=>v]]){const grouped=new Map();for(const r of s[key]){const name=format(r.label);grouped.set(name,(grouped.get(name)||0)+Number(r.total))}box.append(visitSection(title,['Източник / място','Посещения'],[...grouped].map(([name,total])=>[name,String(total)])))}
+}
 async function loadVisits(from,to){
  const id=++visitsRequest,box=$('statsVisits');box.replaceChildren();$('statsResults').hidden=false;
- try{const data=await api('/api/admin/visits?from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to));if(id!==visitsRequest)return;if(![2,3].includes(data.visitVersion))throw Error('За новото броене е нужен обновеният Worker код.');
+ try{const data=await api('/api/admin/visits?from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to));if(id!==visitsRequest)return;if(![2,3].includes(data.visitVersion))throw Error('За новото броене е нужен обновеният Worker код.');renderVisitSummary(data,from,to);
  const headline=document.createElement('p');headline.textContent='Влизания (приблизително): '+data.visits;headline.style.cssText='font-size:1.35em;font-weight:700';box.append(headline);
  const list=document.createElement('div'),detail=document.createElement('div');detail.hidden=true;box.append(list,detail);
  if(data.shown<data.visits){const shown=document.createElement('p');shown.className='muted';shown.textContent='Налични подробности: '+data.shown+' последни влизания.';list.append(shown)}
@@ -82,17 +88,10 @@ async function loadVisits(from,to){
  const heading=document.createElement('h3');heading.textContent='Данни за влизането';const content=document.createElement('div');content.textContent='Зареждане…';detail.append(back,heading,content);detail.scrollIntoView({block:'start'});back.focus({preventScroll:true});
  try{const info=await api('/api/admin/visit-details?id='+encodeURIComponent(visit.id));if(id!==visitsRequest)return;content.replaceChildren();
  const time=new Date(Number(visit.started_at));let country=visit.country||'Неизвестно';try{if(/^[A-Z]{2}$/.test(country))country=new Intl.DisplayNames(['bg'],{type:'region'}).of(country)}catch{}
- const firstPage=info.events.find(event=>event.event==='pageview')?.page||'Няма данни';
- const timedPages=info.pages||[],pageRows=timedPages.length?timedPages.map(p=>[visitPageName(p.page),String(p.views),visitDuration(p.activeMs)]):Object.entries(info.events.filter(e=>e.event==='pageview').reduce((m,e)=>(m[e.page]=(m[e.page]||0)+1,m),{})).map(([page,n])=>[visitPageName(page),String(n),'Няма данни']);
- const fields=[['Дата',new Intl.DateTimeFormat('bg-BG',{timeZone:'Europe/Sofia',dateStyle:'short'}).format(time)],['Час (България)',new Intl.DateTimeFormat('bg-BG',{timeZone:'Europe/Sofia',timeStyle:'short'}).format(time)],['Начална страница',visitPageName(firstPage)],['Страници (различни)',String(new Set(info.events.filter(e=>e.event==='pageview').map(e=>visitPageName(e.page))).size)],['Отваряния (общо)',String(info.events.filter(e=>e.event==='pageview').length)],['Активно време ≈',timedPages.length?visitDuration(info.activeMs):'Няма данни']];
+ const pages=[...new Set([...info.events.filter(e=>e.event==='pageview').map(e=>visitPageName(e.page)),...(info.pages||[]).map(p=>visitPageName(p.page))])];
+ const fields=[['Дата и час',visitTime(visit.started_at)],['Посетени страници',String(pages.length)],['Общо активно време ≈',(info.pages||[]).length?visitDuration(info.activeMs):'Няма данни']];
  content.append(visitTable(['Показател','Стойност'],fields));
- for(const [title,headers,rows]of [
- ['Посетени страници',['Страница','Отваряния','Активно време ≈'],pageRows],
- ['Източник',['Източник','Сайт'],[[visitSource(visit.referrer),visit.referrer||'Директно / неизвестно']]],
- ['Държава',['Държава'],[[country]]],
- ['Град (приблизително)',['Град'],[[visit.city||'Неизвестно']]],
- ['Хронология',['Отворена в','Страница','Активно време ≈'],info.pageHistory?.length?info.pageHistory.map(p=>[visitTime(p.at),visitPageName(p.page),visitDuration(p.activeMs)]):info.events.filter(e=>e.event==='pageview').map(e=>[visitTime(e.at),visitPageName(e.page),'Няма данни'])]
- ]){const section=document.createElement('details'),summary=document.createElement('summary');summary.textContent=title;section.className='visit-section';section.append(summary,visitTable(headers,rows));content.append(section)}
+ content.append(visitSection('Посетени страници',['Страница'],pages.map(name=>[name])),visitSection('Източник',['Източник'],[[visitSource(visit.referrer)]]),visitSection('Държава',['Държава'],[[country]]),visitSection('Град (приблизително)',['Град'],[[visit.city||'Неизвестно']]));
  }catch(e){content.textContent=e.message}
  };
  }
@@ -108,15 +107,8 @@ let statsRequest=0;
 function chooseStatsPeriod(){const custom=$('statsPeriod').value==='custom';$('statsDates').hidden=!custom;if(!custom){const r=statsRange($('statsPeriod').value);$('statsFrom').value=r.from;$('statsTo').value=r.to}}
 async function loadStats(){
  const id=++statsRequest;chooseStatsPeriod();const from=$('statsFrom').value,to=$('statsTo').value;
- if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to){$('statsStatus').textContent='Изберете валидни начална и крайна дата.';return}
- loadVisits(from,to);
- $('statsStatus').textContent='Зареждане…';$('statsResults').replaceChildren();
- try{const data=await api('/api/admin/analytics?from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to));if(id!==statsRequest)return;if(data.analyticsVersion!==1)throw Error('Статистиката изисква обновения Worker код.');
- const box=$('statsResults'),headline=document.createElement('p');headline.textContent='Отворени страници (включително старите данни): '+data.pageviews;headline.style.fontSize='1em';headline.style.fontWeight='700';box.append(headline);
-
- for(const [title,key] of [['Страници','pages'],['Източници на посещения','sources'],['Държави','countries'],['Градове (приблизително)','cities'],['Дни на посещения','days'],['Часове на посещения','hours']]){const section=document.createElement('details'),summary=document.createElement('summary');summary.textContent=title;section.append(summary);const list=document.createElement('dl');list.className='stats-breakdown';for(const row of data[key]||[]){const term=document.createElement('dt'),count=document.createElement('dd');term.textContent=key==='hours'?String(row.label).padStart(2,'0')+':00':key==='pages'?visitPageName(row.label):row.label;count.textContent=String(row.total);list.append(term,count)}section.append(list);box.append(section)}
- $('statsStatus').textContent=data.pageviews?'Период: '+from+' — '+to:'Няма отчетени преглеждания за избрания период.';
- }catch(e){if(id===statsRequest)$('statsStatus').textContent=e.message.includes('404')||e.message.includes('Непозната')?'За активиране поставете обновения Worker код в Cloudflare.':e.message}
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to){++visitsRequest;$('statsVisits').replaceChildren();$('statsResults').replaceChildren();$('statsStatus').textContent='Изберете валидни начална и крайна дата.';return}
+ $('statsStatus').textContent='Зареждане…';$('statsResults').replaceChildren();await loadVisits(from,to);if(id===statsRequest)$('statsStatus').textContent='';
 }
 $('statsPeriod').onchange=()=>{chooseStatsPeriod();if($('statsPeriod').value!=='custom')loadStats()};$('statsLoad').onclick=loadStats;
 $('trafficStats').ontoggle=()=>{if($('trafficStats').open)loadStats()};chooseStatsPeriod();

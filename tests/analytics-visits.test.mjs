@@ -64,4 +64,10 @@ assert.equal((await linked('heartbeat','/',{visitId:'invalid'})).status,400);
 const other=crypto.randomUUID(),otherView=crypto.randomUUID();await collect({mode:'visits-v3',visitId:other,viewId:otherView,eventId:otherView,event:'pageview',page:'/oniholiza.html',activeMs:0});
 let otherDetail=await call(e,'/api/admin/visit-details?id='+other,null,true);assert.equal(otherDetail.data.pages.length,1);assert.equal(otherDetail.data.pages[0].page,'/oniholiza.html');assert.equal(otherDetail.data.activeMs,0);assert(!JSON.stringify(otherDetail.data).includes('/niti.html'));
 assert.equal((await call(e,'/api/admin/visit-details?id='+linkedId)).status,401);Date.now=clock;
+r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,4);assert.equal(r.data.summary.countries[0].total,4);assert.equal(r.data.summary.pages.reduce((n,p)=>n+p.views,0),6);assert.equal(r.data.summary.activeMs,30000);assert.equal(r.data.summary.pages.find(p=>p.page==='/niti.html').views,2);
+// Period summaries must include visits beyond the 100-row visible list.
+const large=env();await call(large,`/api/admin/visits?from=${today}&to=${today}`,null,true);
+for(let i=0;i<105;i++){const vid=crypto.randomUUID();large.DB.sql.prepare('INSERT INTO site_visits VALUES(?,?,?,?,?,?,?)').run(vid,today,clock(),clock(),'BE','Bierbeek','google.com');large.DB.sql.prepare('INSERT INTO site_visit_events VALUES(?,?,?,?,?)').run(crypto.randomUUID(),vid,clock(),'pageview','/');}
+large.DB.sql.prepare('INSERT INTO site_visit_daily VALUES(?,?)').run(today,105);
+const all=await call(large,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(all.data.items.length,100);assert.equal(all.data.summary.sources[0].total,105);assert.equal(all.data.summary.pages[0].views,105);assert.equal(all.data.summary.activeMs,null);
 console.log('PASS: entries compatibility, linked visits count once, isolated pages/clicks, cumulative time deduplication, malformed telemetry rejected, private details, no raw IP.');

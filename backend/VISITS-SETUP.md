@@ -19,3 +19,12 @@ Checks: analytics-admin, analytics-tracker, analytics-visits, analytics and book
 Use backend/worker-visits-v4-final.txt for this update (same content as worker.js and worker-final.txt). Tracking protocol stays visits-v3; /api/schedule advertises analyticsVisitVersion:4. The authenticated detail response adds detailVersion:4 and pageHistory with separate timestamp/page/activeMs for every page opening. It reads existing site_visit_pages rows, including already recorded v3 data, without changing collection or DB schema. Old visits without timed rows still have unknown durations.
 
 Admin names all allowed BG/EN pages using site navigation names. It displays distinct page count separately from total openings; the visited-pages table shows per-page summed views/time. Chronology lists individual page openings and their own active time, including repeated opens of the same page. Click sections and the global click summary are removed from the UI; existing collection protocol remains compatible. Back/period/global breakdown behavior is preserved.
+
+
+## Simplified visit and period summaries v5
+
+Use worker-visits-v5-final.txt (identical to worker.js and worker-final.txt). /api/schedule advertises analyticsVisitVersion:5. Tracker/session protocol and D1 schema remain unchanged.
+
+Individual summary has exactly three rows: date/time, distinct named pages, and total approximate active time. Visited pages is a deduplicated name-only list, without per-page counters or times. Only source/country/city sections remain; chronology and clicks are absent. Entering a service page directly does not imply a home-page view. Internal navigation preserves the same tab visit and initial referring source.
+
+GET /api/admin/visits adds a summary for the entire selected period, independently of the latest-100 list. It counts each visit once for sources/countries/cities, groups page openings by page, and sums recorded page active time. UI shows overall distinct pages, summed active time, page-name/openings list and source/country/city visit counts. Old/expired records without timed history are not fabricated as fully measured; partial time is labeled available data. Detailed retention remains 30 days and lifetime daily counts remain separate.
