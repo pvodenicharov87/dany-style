@@ -201,9 +201,46 @@ async function smsOverview(env){
   return {enabled:smsConfigured(env),provider:"mobica",limit,used,remaining:Math.max(0,limit-used)};
 }
 
+const ANALYTICS_PAGES=new Set(["/","/index.html","/en/index.html","/za-daniela.html","/en/about-daniela.html","/medicinski-pedikyur-po-domovete-plovdiv.html","/en/home-visit-medical-pedicure-plovdiv.html","/vpit-nokat.html","/en/ingrown-toenail.html","/gabichni-izmenenia.html","/en/nail-changes.html","/oniholiza.html","/en/onycholysis.html","/udebeleni-nokti.html","/en/thickened-toenails.html","/niti.html","/en/niti-nail-correction.html","/gel-estestven-nokat.html","/en/gel-natural-nails.html","/izgrazhdane-gel.html","/en/gel-nail-extensions.html","/gellak.html","/en/gel-polish.html","/hiperkeratoza.html","/en/hyperkeratosis.html"]);
+const analyticsSchema=new WeakMap();
+async function ensureAnalytics(db){
+ if(!analyticsSchema.has(db))analyticsSchema.set(db,db.prepare('CREATE TABLE IF NOT EXISTS site_analytics (day TEXT NOT NULL,hour INTEGER NOT NULL,event TEXT NOT NULL,page TEXT NOT NULL,country TEXT NOT NULL,city TEXT NOT NULL,referrer TEXT NOT NULL,total INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(day,hour,event,page,country,city,referrer))').run().catch(e=>{analyticsSchema.delete(db);throw e}));
+ await analyticsSchema.get(db);
+}
+const analyticsRate=new Map();
+function analyticsAllowed(request){
+ const ua=request.headers.get('user-agent')||'';if(/bot|crawler|spider|headless|preview/i.test(ua))return false;
+ const ip=request.headers.get('CF-Connecting-IP')||'unknown',now=Date.now(),prior=analyticsRate.get(ip);
+ if(prior&&now-prior.at<60000){if(prior.count>=40)return false;prior.count++}else analyticsRate.set(ip,{at:now,count:1});
+ if(analyticsRate.size>2000)analyticsRate.clear();return true;
+}
+async function collectAnalytics(request,env){
+ if(!ALLOWED_ORIGINS.has(request.headers.get('Origin')))return err('Origin required',403);
+ if(Number(request.headers.get('content-length')||0)>2048)return err('Too large',413);
+ if(!analyticsAllowed(request))return new Response(null,{status:204});
+ const raw=await request.text();if(raw.length>2048)return err('Too large',413);
+ let body;try{body=JSON.parse(raw)}catch{return err('Invalid event')}
+ if(!['pageview','phone_click','booking_click','home_click'].includes(body.event)||!ANALYTICS_PAGES.has(body.page))return err('Invalid event');
+ let ref='Директно / неизвестно';try{const u=new URL(String(body.referrer||''));if(['http:','https:'].includes(u.protocol)&&!['www.dany.style','dany.style'].includes(u.hostname))ref=u.hostname.toLowerCase().slice(0,120);else if(['www.dany.style','dany.style'].includes(u.hostname))ref='Вътрешна страница'}catch{}
+ const cf=request.cf||{},country=/^[A-Z]{2}$/.test(cf.country||'')?cf.country:'Неизвестно',city=safe(cf.city||'Неизвестно',80);
+ const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Sofia',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date());const part=t=>parts.find(x=>x.type===t).value,day=part('year')+'-'+part('month')+'-'+part('day'),hour=Number(part('hour'));
+ await ensureAnalytics(env.DB);
+ await env.DB.prepare('INSERT INTO site_analytics(day,hour,event,page,country,city,referrer,total) VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(day,hour,event,page,country,city,referrer) DO UPDATE SET total=MIN(total+1,1000000)').bind(day,hour,body.event,body.page,country,city,ref).run();
+ return new Response(null,{status:204,headers:{'Cache-Control':'no-store'}});
+}
+async function analyticsReport(url,env){
+ const from=url.searchParams.get('from'),to=url.searchParams.get('to');if(!validDate(from)||!validDate(to)||from>to||Date.parse(to)-Date.parse(from)>366*864e5)return err('Изберете валиден период до 367 дни.');
+ await ensureAnalytics(env.DB);
+ const rows=(await env.DB.prepare('SELECT day,hour,event,page,country,city,referrer,total FROM site_analytics WHERE day BETWEEN ? AND ?').bind(from,to).all()).results;
+ const groups=(key,event='pageview')=>{const map=new Map();for(const row of rows)if(row.event===event){const label=String(row[key]);map.set(label,(map.get(label)||0)+Number(row.total))}return [...map].map(([label,total])=>({label,total})).sort((a,b)=>key==='day'?a.label.localeCompare(b.label):key==='hour'?Number(a.label)-Number(b.label):b.total-a.total).slice(0,key==='day'?367:30)};
+ const events={};for(const row of rows)events[row.event]=(events[row.event]||0)+Number(row.total);
+ return json({analyticsVersion:1,from,to,timeZone:'Europe/Sofia',pageviews:events.pageview||0,events,pages:groups('page'),countries:groups('country'),cities:groups('city'),sources:groups('referrer'),days:groups('day'),hours:groups('hour'),uniqueVisitors:null,demographicsAvailable:false});
+}
+
 async function handle(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (!env.DB) return err("\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438", 503);
+  if(method==="POST"&&path==="/api/analytics/event")return collectAnalytics(request,env);
   if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:3,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
   if (method === "GET" && path === "/api/calendar") {
     await ensureScheduleSchema(env.DB);
@@ -280,6 +317,7 @@ async function handle(request, env) {
   if (path.startsWith("/api/admin/")) {
     const token = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
     if (!env.SESSION_SECRET || !await verify(token, env.SESSION_SECRET)) return err("\u041C\u043E\u043B\u044F, \u0432\u043B\u0435\u0437\u0442\u0435 \u043E\u0442\u043D\u043E\u0432\u043E \u0432 \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0441\u043A\u0438\u044F \u043F\u0430\u043D\u0435\u043B.", 401);
+    if(method==="GET"&&path==="/api/admin/analytics")return analyticsReport(url,env);
     await ensureScheduleSchema(env.DB);
     if(method==="GET"&&path==="/api/admin/sms-status")return json(await smsOverview(env));
     if (method === "GET" && path === "/api/admin/calendar") {
