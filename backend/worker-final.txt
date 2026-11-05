@@ -266,7 +266,7 @@ async function visitReport(url,env){
 }
 async function visitDetails(url,env){
  const id=url.searchParams.get('id');if(!/^[-a-f0-9]{36}$/.test(id||''))return err('Невалидно посещение.');await ensureVisits(env.DB);
- const events=(await env.DB.prepare('SELECT at,event,page FROM site_visit_events WHERE visit_id=? ORDER BY at,rowid LIMIT 500').bind(id).all()).results;const pages=(await env.DB.prepare('SELECT page,COUNT(*) AS views,SUM(active_ms) AS activeMs,MIN(opened_at) AS firstAt,MAX(last_seen) AS lastAt FROM site_visit_pages WHERE visit_id=? GROUP BY page ORDER BY firstAt').bind(id).all()).results;return json({detailVersion:3,events,pages,activeMs:pages.reduce((n,p)=>n+Number(p.activeMs),0)});
+ const events=(await env.DB.prepare('SELECT at,event,page FROM site_visit_events WHERE visit_id=? ORDER BY at,rowid LIMIT 500').bind(id).all()).results;const pages=(await env.DB.prepare('SELECT page,COUNT(*) AS views,SUM(active_ms) AS activeMs,MIN(opened_at) AS firstAt,MAX(last_seen) AS lastAt FROM site_visit_pages WHERE visit_id=? GROUP BY page ORDER BY firstAt').bind(id).all()).results;const pageHistory=(await env.DB.prepare('SELECT page,opened_at AS at,active_ms AS activeMs FROM site_visit_pages WHERE visit_id=? ORDER BY opened_at,rowid LIMIT 500').bind(id).all()).results;return json({detailVersion:4,events,pages,pageHistory,activeMs:pages.reduce((n,p)=>n+Number(p.activeMs),0)});
 }
 
 async function collectAnalytics(request,env){
@@ -298,7 +298,7 @@ async function handle(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (!env.DB) return err("\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438", 503);
   if(method==="POST"&&path==="/api/analytics/event")return collectAnalytics(request,env);
-  if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:3,analyticsVisitVersion:3,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
+  if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:3,analyticsVisitVersion:4,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
   if (method === "GET" && path === "/api/calendar") {
     await ensureScheduleSchema(env.DB);
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");

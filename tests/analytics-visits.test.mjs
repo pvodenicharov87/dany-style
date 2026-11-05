@@ -56,6 +56,8 @@ await linked('pageview');now+=15000;await linked('heartbeat','/',{activeMs:15000
 const nextView=crypto.randomUUID();await linked('pageview','/niti.html',{viewId:nextView,eventId:nextView});now+=10000;await linked('heartbeat','/niti.html',{viewId:nextView,activeMs:10000});await linked('phone_click','/niti.html',{viewId:nextView,activeMs:10000});
 r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,3);assert.equal(r.data.items.find(x=>x.id===linkedId).pageviews,2);
 detail=await call(e,'/api/admin/visit-details?id='+linkedId,null,true);assert.equal(detail.data.pages.length,2);assert.equal(detail.data.activeMs,25000);assert.equal(detail.data.events.filter(x=>x.event==='phone_click').length,1);assert.equal(detail.data.pages.find(x=>x.page==='/').activeMs,15000);
+const repeatView=crypto.randomUUID();await linked('pageview','/niti.html',{viewId:repeatView,eventId:repeatView});now+=5000;await linked('heartbeat','/niti.html',{viewId:repeatView,activeMs:5000});
+detail=await call(e,'/api/admin/visit-details?id='+linkedId,null,true);assert.equal(detail.data.detailVersion,4);assert.equal(detail.data.pageHistory.length,3);assert.equal(detail.data.pageHistory[1].activeMs,10000);assert.equal(detail.data.pageHistory[2].activeMs,5000);assert.equal(detail.data.pages.find(p=>p.page==='/niti.html').views,2);assert.equal(detail.data.pages.find(p=>p.page==='/niti.html').activeMs,15000);
 assert.equal((await linked('heartbeat','/',{activeMs:-1})).status,400);
 assert.equal((await linked('heartbeat','/',{visitId:'invalid'})).status,400);
 // A second visit must have isolated history.

@@ -13,3 +13,9 @@ D1 schema is additive: site_visit_pages is created automatically. Existing reser
 UI: existing collapsed statistics and period dropdown preserved. Global period breakdowns remain outside visits. Opening one visit hides global aggregates and shows its summary table, per-visit page/view/time table, selected clicks, source, country, city and chronology. Back restores focus, scroll and list without losing period. No long explanatory paragraphs in the admin UI. Public SEO content and metadata are unchanged.
 
 Checks: analytics-admin, analytics-tracker, analytics-visits, analytics and booking-ui tests; SMS mock regression. Publishing GitHub frontend and manually deploying Worker are separate steps; uploading the Worker alone cannot update admin.html.
+
+## Display/history update v4
+
+Use backend/worker-visits-v4-final.txt for this update (same content as worker.js and worker-final.txt). Tracking protocol stays visits-v3; /api/schedule advertises analyticsVisitVersion:4. The authenticated detail response adds detailVersion:4 and pageHistory with separate timestamp/page/activeMs for every page opening. It reads existing site_visit_pages rows, including already recorded v3 data, without changing collection or DB schema. Old visits without timed rows still have unknown durations.
+
+Admin names all allowed BG/EN pages using site navigation names. It displays distinct page count separately from total openings; the visited-pages table shows per-page summed views/time. Chronology lists individual page openings and their own active time, including repeated opens of the same page. Click sections and the global click summary are removed from the UI; existing collection protocol remains compatible. Back/period/global breakdown behavior is preserved.
