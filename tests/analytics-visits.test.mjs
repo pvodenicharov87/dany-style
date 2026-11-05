@@ -36,10 +36,17 @@ assert.equal((await call(e,'/api/admin/analytics?from=2027-01-01&to=2026-01-01',
 assert.equal((await call(e,'/api/admin/analytics?from=2020-01-01&to=2026-01-01',null,true)).status,400);
 const cols=e.DB.sql.prepare('PRAGMA table_info(site_analytics)').all().map(x=>x.name);assert(!cols.some(x=>/ip|email|phone|visitor|useragent/.test(x)));const rows=e.DB.sql.prepare('SELECT * FROM site_analytics').all();assert(!JSON.stringify(rows).includes('private'));assert.equal(rows.filter(x=>x.event==='pageview').length,1);assert.equal(rows.find(x=>x.event==='pageview').total,2);
 
-const visitId=crypto.randomUUID(),eventA=crypto.randomUUID();
-await collect({event:'pageview',page:'/',visitId,eventId:eventA,consent:true});await collect({event:'pageview',page:'/oniholiza.html',visitId,eventId:crypto.randomUUID(),consent:true});await collect({event:'pageview',page:'/',visitId,eventId:eventA,consent:true});
-const another=crypto.randomUUID();await collect({event:'pageview',page:'/',visitId:another,eventId:crypto.randomUUID(),consent:true});
-r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,2);assert.equal(r.data.items.find(x=>x.id===visitId).pageviews,2);assert.equal(r.data.retentionDays,30);
-let detail=await call(e,'/api/admin/visit-details?id='+visitId,null,true);assert.equal(detail.data.events.length,2);assert.equal(detail.data.events[1].page,'/oniholiza.html');assert.equal((await call(e,'/api/admin/visit-details?id='+visitId)).status,401);assert.equal((await call(e,`/api/admin/visits?from=${today}&to=${today}`)).status,401);
-await collect({event:'pageview',page:'/',visitId:crypto.randomUUID(),eventId:crypto.randomUUID(),consent:false});r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,2);
-console.log('PASS: pages grouped into visits, separate browser/return IDs count separately, duplicate event deduplication, private ordered details, consent required, existing aggregate history preserved.');
+
+await collect({mode:'entries-v2',event:'pageview',page:'/',entry:true,referrer:'https://google.com/search?q=private'});
+await collect({mode:'entries-v2',event:'pageview',page:'/oniholiza.html',entry:false,referrer:'https://www.dany.style/'});
+await collect({mode:'entries-v2',event:'pageview',page:'/niti.html',entry:true,referrer:'https://www.dany.style/'});
+await collect({mode:'entries-v2',event:'pageview',page:'/',entry:true});
+r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);
+assert.equal(r.data.visitVersion,2);assert.equal(r.data.visits,2);assert.equal(r.data.inactivityMinutes,null);assert.equal(r.data.items.length,2);assert(r.data.items.every(x=>x.pageviews===1));
+const id=r.data.items[0].id;
+let detail=await call(e,'/api/admin/visit-details?id='+id,null,true);assert.equal(detail.data.events.length,1);assert.equal((await call(e,'/api/admin/visit-details?id='+id)).status,401);
+// Cached old trackers must not reintroduce linked histories.
+await collect({event:'pageview',page:'/',visitId:crypto.randomUUID(),eventId:crypto.randomUUID(),consent:true});
+r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,2);
+assert(!JSON.stringify(e.DB.sql.prepare('SELECT * FROM site_visits').all()).includes('test-ip'));
+console.log('PASS: separate entry counts, internal pages do not create entries, no browser IDs accepted, private unlinked details, raw IP excluded.');
