@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {readFileSync} from 'node:fs';
+const html=readFileSync(new URL('../admin.html',import.meta.url),'utf8');
+const code=html.slice(html.indexOf('let visitsRequest=0;'),html.indexOf('function statsToday()'));
+class El{constructor(tag){this.tag=tag;this.children=[];this.hidden=false;this.style={}}set textContent(s){this.text=String(s);this.children=[]}get textContent(){return this.text||''}append(...x){this.children.push(...x)}replaceChildren(...x){this.children=x;this.text=''}focus(options){this.focusOptions=options}scrollIntoView(){}}
+const box=new El('div'),calls=[],scroll=[];
+const visits=[{id:'one',started_at:Date.UTC(2026,10,5,15,30),city:'Bierbeek',country:'BE',referrer:'l.facebook.com'},{id:'two',started_at:Date.UTC(2026,10,5,15,40),city:'<img onerror=alert(1)>',country:'BG',referrer:'Директно / неизвестно'}];
+const context=vm.createContext({Intl,Date,URL,encodeURIComponent,Error,document:{createElement:tag=>new El(tag)},$:(id)=>{assert.equal(id,'statsVisits');return box},window:{scrollY:1450,scrollTo:x=>scroll.push(x)},requestAnimationFrame:fn=>fn(),api:async path=>{calls.push(path);if(path.startsWith('/api/admin/visits?'))return {visitVersion:2,visits:2,shown:2,items:visits};return {events:[{event:'pageview',page:'/niti.html'}]}}});
+vm.runInContext(code,context);
+await context.loadVisits('2026-11-05','2026-11-05');
+assert.equal(calls.length,1);const [headline,list,detail]=box.children;assert.equal(list.children.length,2);assert.equal(detail.hidden,true);
+await list.children[0].onclick();assert.equal(list.hidden,true);assert.equal(headline.hidden,true);assert.equal(detail.hidden,false);
+let table=detail.children[2].children[0];assert.equal(table.tag,'table');let rows=table.children[0].children;assert.equal(rows.length,6);assert.equal(rows[4].children[1].textContent,'Facebook');assert.equal(rows[5].children[1].textContent,'/niti.html');
+detail.children[0].onclick();assert.equal(list.hidden,false);assert.equal(headline.hidden,false);assert.equal(detail.hidden,true);assert.equal(scroll[0].top,1450);assert.equal(list.children[0].focusOptions.preventScroll,true);assert.equal(calls.length,2);
+await list.children[1].onclick();rows=detail.children[2].children[0].children[0].children;assert.equal(rows[3].children[1].textContent,'<img onerror=alert(1)>');assert.equal(rows[4].children[1].textContent,'Директно / неизвестно');
+assert.equal(context.visitSource('www.google.bg'),'Google');assert.equal(context.visitSource('www.instagram.com'),'Instagram');assert.equal(context.visitSource('notfacebook.com'),'notfacebook.com');
+assert(!html.includes('id="statsResults"'));assert(!html.includes('/api/admin/analytics?'));assert(!html.includes('Новото измерване отчита'));assert(!html.includes('Часова зона: България. Основният брояч'));
+assert.equal(readFileSync(new URL('../preview-mobile-admin-seo.html',import.meta.url),'utf8'),html);
+console.log('PASS: period list only, six per-entry table fields, source labels, safe text rendering, separate detail screen, Back restores same list/scroll/focus, no aggregate fetch or explanatory paragraphs, identical mobile preview.');
