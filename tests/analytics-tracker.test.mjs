@@ -1,12 +1,12 @@
-import assert from 'node:assert/strict';
-import vm from 'node:vm';
-import {readFileSync} from 'node:fs';
-const source=readFileSync(new URL('../assets/site-analytics.js',import.meta.url),'utf8');
-function boot({referrer='',type='navigate',gpc=false}={}){const calls=[],handlers={},body={children:[],append(...x){this.children.push(...x)}};const document={referrer,documentElement:{lang:'bg'},body,createElement(){return {style:{},append(){}}},addEventListener(e,fn){handlers[e]=fn}};vm.runInNewContext(source,{navigator:{globalPrivacyControl:gpc},document,location:{pathname:'/'},performance:{getEntriesByType(){return [{type}]}},URL,fetch:(_,o)=>{calls.push(JSON.parse(o.body));return Promise.resolve()},localStorage:{getItem(){throw Error('Storage forbidden')},setItem(){throw Error('Storage forbidden')}}});return {calls,handlers,body}}
-let a=boot();assert.equal(a.calls.length,1);assert.equal(a.calls[0].entry,true);assert.equal(a.calls[0].mode,'entries-v2');assert(!('visitId' in a.calls[0]));assert(!('consent' in a.calls[0]));
-for(const referrer of ['https://dany.style/','https://www.dany.style/oniholiza.html'])assert.equal(boot({referrer}).calls[0].entry,false);
-for(const type of ['reload','back_forward'])assert.equal(boot({type}).calls[0].entry,false);
-assert.equal(boot({referrer:'https://google.com/search?q=secret'}).calls[0].referrer,'https://google.com');assert.equal(boot({gpc:true}).calls.length,0);
-assert(!/localStorage|sessionStorage|document\.cookie|randomUUID|600000|Разрешавам/.test(source));
-a.handlers.click({target:{closest(){return {getAttribute(){return 'tel:123'},id:''}}}});assert.equal(a.calls[1].event,'phone_click');assert.equal(a.calls[1].entry,false);assert.equal(a.body.children.length,1);
-console.log('PASS: no identifiers/storage/consent popup; external/direct entries counted; internal navigation, reload and history excluded; pageviews separate; DNT/GPC support.');
+import assert from 'node:assert/strict';import vm from 'node:vm';import {readFileSync} from 'node:fs';
+const source=readFileSync(new URL('../assets/site-analytics.js',import.meta.url),'utf8');let seq=0;
+const uuid=()=>`00000000-0000-4000-8000-${String(++seq).padStart(12,'0')}`;
+function boot({storage=new Map(),referrer='',type='navigate',gpc=false,hidden=false}={}){let now=0;const calls=[],handlers={},wh={},intervals=[],body={children:[],append(...x){this.children.push(...x)}};const document={referrer,hidden,documentElement:{lang:'bg'},body,createElement(){return {style:{},append(){}}},addEventListener(e,fn){handlers[e]=fn}};vm.runInNewContext(source,{navigator:{globalPrivacyControl:gpc},document,location:{pathname:'/niti.html'},performance:{now:()=>now,getEntriesByType:()=>[{type}]},URL,crypto:{randomUUID:uuid},fetch:(_,o)=>{calls.push(JSON.parse(o.body));return Promise.resolve()},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},window:{addEventListener:(e,fn)=>wh[e]=fn},setInterval:fn=>intervals.push(fn)});return {calls,handlers,wh,document,body,advance(ms){now+=ms;intervals.forEach(fn=>fn())},storage}}
+const shared=new Map();let a=boot({storage:shared,referrer:'https://google.com/search?q=private'});assert.equal(a.calls[0].event,'pageview');assert.equal(a.calls[0].referrer,'https://google.com');const id=a.calls[0].visitId;
+let b=boot({storage:shared,referrer:'https://www.dany.style/'});assert.equal(b.calls[0].visitId,id);assert.notEqual(b.calls[0].viewId,a.calls[0].viewId);
+assert.equal(boot({storage:shared,type:'reload'}).calls[0].visitId,id);assert.notEqual(boot({storage:shared}).calls[0].visitId,id);assert.notEqual(boot().calls[0].visitId,id);
+a.advance(15000);assert.equal(a.calls.at(-1).activeMs,15000);a.advance(15000);assert.equal(a.calls.at(-1).activeMs,30000);const n=a.calls.length;a.advance(60000);assert.equal(a.calls.length,n);a.handlers.pointerdown();a.advance(15000);assert.equal(a.calls.at(-1).activeMs,45000);
+a.document.hidden=true;a.handlers.visibilitychange();a.advance(60000);assert.equal(a.calls.at(-1).activeMs,45000);a.document.hidden=false;a.handlers.visibilitychange();a.advance(15000);assert.equal(a.calls.at(-1).activeMs,60000);
+a.handlers.click({target:{closest:()=>({getAttribute:()=> 'tel:secret-phone',id:''})}});assert.equal(a.calls.at(-1).event,'phone_click');assert(!JSON.stringify(a.calls).includes('secret-phone'));
+assert.equal(boot({gpc:true}).calls.length,0);assert.equal(boot({hidden:true}).calls.length,0);assert(!/localStorage|document\.cookie|Разрешавам|600000/.test(source));assert.equal(a.body.children.length,1);
+console.log('PASS: per-tab visits across pages/reload, new direct/tab entries separate, origin-only source, cumulative active time, idle/hidden time excluded, click values private, DNT/GPC, no consent popup or persistent identity.');

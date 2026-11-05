@@ -223,6 +223,8 @@ async function ensureVisits(db){
  await db.prepare('INSERT OR IGNORE INTO site_visit_daily(day,total) SELECT day,COUNT(*) FROM site_visits GROUP BY day').run();
  await db.prepare('CREATE TABLE IF NOT EXISTS site_visit_events (id TEXT PRIMARY KEY,visit_id TEXT NOT NULL,at INTEGER NOT NULL,event TEXT NOT NULL,page TEXT NOT NULL)').run();
  await db.prepare('CREATE INDEX IF NOT EXISTS site_visit_events_visit ON site_visit_events(visit_id,at)').run();
+ await db.prepare('CREATE TABLE IF NOT EXISTS site_visit_pages(id TEXT PRIMARY KEY,visit_id TEXT NOT NULL,page TEXT NOT NULL,opened_at INTEGER NOT NULL,last_seen INTEGER NOT NULL,active_ms INTEGER NOT NULL DEFAULT 0)').run();
+ await db.prepare('CREATE INDEX IF NOT EXISTS site_visit_pages_visit ON site_visit_pages(visit_id,opened_at)').run();
  })().catch(e=>{visitSchema.delete(db);throw e}));await visitSchema.get(db);
 }
 // Entry records cannot be joined to subsequent browsing: no client identifier is received.
@@ -237,16 +239,34 @@ async function recordEntry(env,body,geo,day){
  await env.DB.prepare('DELETE FROM site_visit_events WHERE at<?').bind(now-30*864e5).run();
  await env.DB.prepare('DELETE FROM site_visits WHERE last_seen<?').bind(now-30*864e5).run();
 }
+const visitUuid=value=>/^[-a-f0-9]{36}$/.test(value||'');
+async function recordLinkedVisit(env,body,geo,day){
+ if(!visitUuid(body.visitId)||!visitUuid(body.viewId)||!visitUuid(body.eventId)||!Number.isInteger(body.activeMs)||body.activeMs<0||body.activeMs>86400000)return false;
+ await ensureVisits(env.DB);const now=Date.now();
+ const statements=[
+ env.DB.prepare('INSERT OR IGNORE INTO site_visits(id,day,started_at,last_seen,country,city,referrer) VALUES(?,?,?,?,?,?,?)').bind(body.visitId,day,now,now,geo.country,geo.city,geo.referrer),
+ env.DB.prepare('INSERT INTO site_visit_daily(day,total) SELECT ?,1 WHERE changes()=1 ON CONFLICT(day) DO UPDATE SET total=total+1').bind(day),
+ env.DB.prepare('UPDATE site_visits SET last_seen=MAX(last_seen,?) WHERE id=?').bind(now,body.visitId),
+ env.DB.prepare('INSERT INTO site_visit_pages(id,visit_id,page,opened_at,last_seen,active_ms) SELECT ?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM site_visit_pages WHERE visit_id=?)<500 ON CONFLICT(id) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen),active_ms=MAX(active_ms,MIN(excluded.active_ms,MAX(0,excluded.last_seen-opened_at))) WHERE visit_id=excluded.visit_id AND page=excluded.page').bind(body.viewId,body.visitId,body.page,now,now,0,body.visitId)
+ ];
+ if(body.event!=='heartbeat')statements.push(env.DB.prepare('INSERT OR IGNORE INTO site_visit_events(id,visit_id,at,event,page) SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM site_visit_events WHERE visit_id=?)<500').bind(body.eventId,body.visitId,now,body.event,body.page,body.visitId));
+ // First request may arrive late: subsequent updates are bounded by server-observed time.
+ statements.push(env.DB.prepare('UPDATE site_visit_pages SET active_ms=MAX(active_ms,MIN(?,MAX(0,?-opened_at))),last_seen=MAX(last_seen,?) WHERE id=? AND visit_id=? AND page=?').bind(body.activeMs,now,now,body.viewId,body.visitId,body.page));
+ await env.DB.batch(statements);
+ await env.DB.prepare('DELETE FROM site_visit_pages WHERE last_seen<?').bind(now-30*864e5).run();
+ await env.DB.prepare('DELETE FROM site_visit_events WHERE at<?').bind(now-30*864e5).run();
+ await env.DB.prepare('DELETE FROM site_visits WHERE last_seen<?').bind(now-30*864e5).run();return true;
+}
 async function visitReport(url,env){
  const from=url.searchParams.get('from'),to=url.searchParams.get('to');if(!validDate(from)||!validDate(to)||from>to||Date.parse(to)-Date.parse(from)>366*864e5)return err('Изберете валиден период до 367 дни.');
  await ensureVisits(env.DB);
  const count=await env.DB.prepare('SELECT COALESCE(SUM(total),0) AS total FROM site_visit_daily WHERE day BETWEEN ? AND ?').bind(from,to).first();
  const visits=(await env.DB.prepare('SELECT v.*, (SELECT COUNT(*) FROM site_visit_events e WHERE e.visit_id=v.id AND e.event=\'pageview\') AS pageviews FROM site_visits v WHERE day BETWEEN ? AND ? ORDER BY started_at DESC LIMIT 100').bind(from,to).all()).results;
- return json({visitVersion:2,measurement:'unlinked-entries',visits:Number(count?.total||0),items:visits,shown:visits.length,retentionDays:30,inactivityMinutes:null,timeZone:'Europe/Sofia'});
+ return json({visitVersion:3,measurement:'tab-visits',visits:Number(count?.total||0),items:visits,shown:visits.length,retentionDays:30,inactivityMinutes:null,timeZone:'Europe/Sofia'});
 }
 async function visitDetails(url,env){
  const id=url.searchParams.get('id');if(!/^[-a-f0-9]{36}$/.test(id||''))return err('Невалидно посещение.');await ensureVisits(env.DB);
- const events=(await env.DB.prepare('SELECT at,event,page FROM site_visit_events WHERE visit_id=? ORDER BY at,rowid LIMIT 500').bind(id).all()).results;return json({events});
+ const events=(await env.DB.prepare('SELECT at,event,page FROM site_visit_events WHERE visit_id=? ORDER BY at,rowid LIMIT 500').bind(id).all()).results;const pages=(await env.DB.prepare('SELECT page,COUNT(*) AS views,SUM(active_ms) AS activeMs,MIN(opened_at) AS firstAt,MAX(last_seen) AS lastAt FROM site_visit_pages WHERE visit_id=? GROUP BY page ORDER BY firstAt').bind(id).all()).results;return json({detailVersion:3,events,pages,activeMs:pages.reduce((n,p)=>n+Number(p.activeMs),0)});
 }
 
 async function collectAnalytics(request,env){
@@ -255,11 +275,12 @@ async function collectAnalytics(request,env){
  if(!analyticsAllowed(request))return new Response(null,{status:204});
  const raw=await request.text();if(raw.length>2048)return err('Too large',413);
  let body;try{body=JSON.parse(raw)}catch{return err('Invalid event')}
- if(!['pageview','phone_click','booking_click','home_click'].includes(body.event)||!ANALYTICS_PAGES.has(body.page))return err('Invalid event');
+ if(!['pageview','phone_click','booking_click','home_click','heartbeat'].includes(body.event)||!ANALYTICS_PAGES.has(body.page))return err('Invalid event');
  let ref='Директно / неизвестно';try{const u=new URL(String(body.referrer||''));if(['http:','https:'].includes(u.protocol)&&!['www.dany.style','dany.style'].includes(u.hostname))ref=u.hostname.toLowerCase().slice(0,120);else if(['www.dany.style','dany.style'].includes(u.hostname))ref='Вътрешна страница'}catch{}
  const cf=request.cf||{},country=/^[A-Z]{2}$/.test(cf.country||'')?cf.country:'Неизвестно',city=safe(cf.city||'Неизвестно',80);
  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Sofia',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date());const part=t=>parts.find(x=>x.type===t).value,day=part('year')+'-'+part('month')+'-'+part('day'),hour=Number(part('hour'));
- await recordEntry(env,body,{country,city,referrer:ref},day);
+ if(body.mode==='visits-v3'){if(!await recordLinkedVisit(env,body,{country,city,referrer:ref},day))return err('Invalid visit');}else await recordEntry(env,body,{country,city,referrer:ref},day);
+ if(body.event==='heartbeat')return new Response(null,{status:204,headers:{'Cache-Control':'no-store'}});
  await ensureAnalytics(env.DB);
  await env.DB.prepare('INSERT INTO site_analytics(day,hour,event,page,country,city,referrer,total) VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(day,hour,event,page,country,city,referrer) DO UPDATE SET total=MIN(total+1,1000000)').bind(day,hour,body.event,body.page,country,city,ref).run();
  return new Response(null,{status:204,headers:{'Cache-Control':'no-store'}});
@@ -277,7 +298,7 @@ async function handle(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (!env.DB) return err("\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438", 503);
   if(method==="POST"&&path==="/api/analytics/event")return collectAnalytics(request,env);
-  if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:3,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
+  if (method === "GET" && path === "/api/schedule") return json({...scheduleInfo,smsVersion:3,analyticsVisitVersion:3,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});
   if (method === "GET" && path === "/api/calendar") {
     await ensureScheduleSchema(env.DB);
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");

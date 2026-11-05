@@ -42,11 +42,24 @@ await collect({mode:'entries-v2',event:'pageview',page:'/oniholiza.html',entry:f
 await collect({mode:'entries-v2',event:'pageview',page:'/niti.html',entry:true,referrer:'https://www.dany.style/'});
 await collect({mode:'entries-v2',event:'pageview',page:'/',entry:true});
 r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);
-assert.equal(r.data.visitVersion,2);assert.equal(r.data.visits,2);assert.equal(r.data.inactivityMinutes,null);assert.equal(r.data.items.length,2);assert(r.data.items.every(x=>x.pageviews===1));
+assert.equal(r.data.visitVersion,3);assert.equal(r.data.visits,2);assert.equal(r.data.inactivityMinutes,null);assert.equal(r.data.items.length,2);assert(r.data.items.every(x=>x.pageviews===1));
 const id=r.data.items[0].id;
 let detail=await call(e,'/api/admin/visit-details?id='+id,null,true);assert.equal(detail.data.events.length,1);assert.equal((await call(e,'/api/admin/visit-details?id='+id)).status,401);
 // Cached old trackers must not reintroduce linked histories.
 await collect({event:'pageview',page:'/',visitId:crypto.randomUUID(),eventId:crypto.randomUUID(),consent:true});
 r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,2);
 assert(!JSON.stringify(e.DB.sql.prepare('SELECT * FROM site_visits').all()).includes('test-ip'));
-console.log('PASS: separate entry counts, internal pages do not create entries, no browser IDs accepted, private unlinked details, raw IP excluded.');
+
+const linkedId=crypto.randomUUID(),viewId=crypto.randomUUID();const clock=Date.now;let now=clock();Date.now=()=>now;
+const linked=(event,page='/',extra={})=>collect({mode:'visits-v3',visitId:linkedId,viewId,eventId:event==='pageview'?viewId:crypto.randomUUID(),event,page,activeMs:0,...extra});
+await linked('pageview');now+=15000;await linked('heartbeat','/',{activeMs:15000});await linked('heartbeat','/',{activeMs:15000});
+const nextView=crypto.randomUUID();await linked('pageview','/niti.html',{viewId:nextView,eventId:nextView});now+=10000;await linked('heartbeat','/niti.html',{viewId:nextView,activeMs:10000});await linked('phone_click','/niti.html',{viewId:nextView,activeMs:10000});
+r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,3);assert.equal(r.data.items.find(x=>x.id===linkedId).pageviews,2);
+detail=await call(e,'/api/admin/visit-details?id='+linkedId,null,true);assert.equal(detail.data.pages.length,2);assert.equal(detail.data.activeMs,25000);assert.equal(detail.data.events.filter(x=>x.event==='phone_click').length,1);assert.equal(detail.data.pages.find(x=>x.page==='/').activeMs,15000);
+assert.equal((await linked('heartbeat','/',{activeMs:-1})).status,400);
+assert.equal((await linked('heartbeat','/',{visitId:'invalid'})).status,400);
+// A second visit must have isolated history.
+const other=crypto.randomUUID(),otherView=crypto.randomUUID();await collect({mode:'visits-v3',visitId:other,viewId:otherView,eventId:otherView,event:'pageview',page:'/oniholiza.html',activeMs:0});
+let otherDetail=await call(e,'/api/admin/visit-details?id='+other,null,true);assert.equal(otherDetail.data.pages.length,1);assert.equal(otherDetail.data.pages[0].page,'/oniholiza.html');assert.equal(otherDetail.data.activeMs,0);assert(!JSON.stringify(otherDetail.data).includes('/niti.html'));
+assert.equal((await call(e,'/api/admin/visit-details?id='+linkedId)).status,401);Date.now=clock;
+console.log('PASS: entries compatibility, linked visits count once, isolated pages/clicks, cumulative time deduplication, malformed telemetry rejected, private details, no raw IP.');
