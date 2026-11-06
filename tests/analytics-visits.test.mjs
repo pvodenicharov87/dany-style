@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 const workerSource=readFileSync(new URL('../backend/worker.js',import.meta.url),'utf8');
-const {default:worker,notifySms,smsPhone,smsMessage}=await import('data:text/javascript;base64,'+Buffer.from(workerSource+'\nexport {notifySms,smsPhone,smsMessage};').toString('base64'));
+const {default:worker,notifySms,smsPhone,smsMessage,analyticsScopedId}=await import('data:text/javascript;base64,'+Buffer.from(workerSource+'\nexport {notifySms,smsPhone,smsMessage,analyticsScopedId};').toString('base64'));
 const date=new Date(Date.now()+7*86400000).toISOString().slice(0,10);
 class D1 {
  constructor(){this.sql=new DatabaseSync(':memory:');this.sql.exec(`CREATE TABLE slots(date TEXT NOT NULL,time TEXT NOT NULL,kind TEXT NOT NULL,id TEXT,name TEXT,phone TEXT,email TEXT,service TEXT,PRIMARY KEY(date,time));`)}
@@ -50,20 +50,20 @@ await collect({event:'pageview',page:'/',visitId:crypto.randomUUID(),eventId:cry
 r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,2);
 assert(!JSON.stringify(e.DB.sql.prepare('SELECT * FROM site_visits').all()).includes('test-ip'));
 
-const linkedId=crypto.randomUUID(),viewId=crypto.randomUUID();const clock=Date.now;let now=clock();Date.now=()=>now;
+const linkedId=crypto.randomUUID(),viewId=crypto.randomUUID(),linkedKey=await analyticsScopedId('visit',linkedId,today);const clock=Date.now;let now=clock();Date.now=()=>now;
 const linked=(event,page='/',extra={})=>collect({mode:'visits-v3',visitId:linkedId,viewId,eventId:event==='pageview'?viewId:crypto.randomUUID(),event,page,activeMs:0,...extra});
 await linked('pageview');now+=15000;await linked('heartbeat','/',{activeMs:15000});await linked('heartbeat','/',{activeMs:15000});
 const nextView=crypto.randomUUID();await linked('pageview','/niti.html',{viewId:nextView,eventId:nextView});now+=10000;await linked('heartbeat','/niti.html',{viewId:nextView,activeMs:10000});await linked('phone_click','/niti.html',{viewId:nextView,activeMs:10000});
-r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,3);assert.equal(r.data.items.find(x=>x.id===linkedId).pageviews,2);
-detail=await call(e,'/api/admin/visit-details?id='+linkedId,null,true);assert.equal(detail.data.pages.length,2);assert.equal(detail.data.activeMs,25000);assert.equal(detail.data.events.filter(x=>x.event==='phone_click').length,1);assert.equal(detail.data.pages.find(x=>x.page==='/').activeMs,15000);
+r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,3);assert.equal(r.data.items.find(x=>x.id===linkedKey).pageviews,2);
+detail=await call(e,'/api/admin/visit-details?id='+linkedKey,null,true);assert.equal(detail.data.pages.length,2);assert.equal(detail.data.activeMs,25000);assert.equal(detail.data.events.filter(x=>x.event==='phone_click').length,1);assert.equal(detail.data.pages.find(x=>x.page==='/').activeMs,15000);
 const repeatView=crypto.randomUUID();await linked('pageview','/niti.html',{viewId:repeatView,eventId:repeatView});now+=5000;await linked('heartbeat','/niti.html',{viewId:repeatView,activeMs:5000});
-detail=await call(e,'/api/admin/visit-details?id='+linkedId,null,true);assert.equal(detail.data.detailVersion,4);assert.equal(detail.data.pageHistory.length,3);assert.equal(detail.data.pageHistory[1].activeMs,10000);assert.equal(detail.data.pageHistory[2].activeMs,5000);assert.equal(detail.data.pages.find(p=>p.page==='/niti.html').views,2);assert.equal(detail.data.pages.find(p=>p.page==='/niti.html').activeMs,15000);
+detail=await call(e,'/api/admin/visit-details?id='+linkedKey,null,true);assert.equal(detail.data.detailVersion,4);assert.equal(detail.data.pageHistory.length,3);assert.equal(detail.data.pageHistory[1].activeMs,10000);assert.equal(detail.data.pageHistory[2].activeMs,5000);assert.equal(detail.data.pages.find(p=>p.page==='/niti.html').views,2);assert.equal(detail.data.pages.find(p=>p.page==='/niti.html').activeMs,15000);
 assert.equal((await linked('heartbeat','/',{activeMs:-1})).status,400);
 assert.equal((await linked('heartbeat','/',{visitId:'invalid'})).status,400);
 // A second visit must have isolated history.
 const other=crypto.randomUUID(),otherView=crypto.randomUUID();await collect({mode:'visits-v3',visitId:other,viewId:otherView,eventId:otherView,event:'pageview',page:'/oniholiza.html',activeMs:0});
-let otherDetail=await call(e,'/api/admin/visit-details?id='+other,null,true);assert.equal(otherDetail.data.pages.length,1);assert.equal(otherDetail.data.pages[0].page,'/oniholiza.html');assert.equal(otherDetail.data.activeMs,0);assert(!JSON.stringify(otherDetail.data).includes('/niti.html'));
-assert.equal((await call(e,'/api/admin/visit-details?id='+linkedId)).status,401);Date.now=clock;
+let otherDetail=await call(e,'/api/admin/visit-details?id='+await analyticsScopedId('visit',other,today),null,true);assert.equal(otherDetail.data.pages.length,1);assert.equal(otherDetail.data.pages[0].page,'/oniholiza.html');assert.equal(otherDetail.data.activeMs,0);assert(!JSON.stringify(otherDetail.data).includes('/niti.html'));
+assert.equal((await call(e,'/api/admin/visit-details?id='+linkedKey)).status,401);Date.now=clock;
 r=await call(e,`/api/admin/visits?from=${today}&to=${today}`,null,true);assert.equal(r.data.visits,4);assert.equal(r.data.summary.countries[0].total,4);assert.equal(r.data.summary.pages.reduce((n,p)=>n+p.views,0),6);assert.equal(r.data.summary.activeMs,30000);assert.equal(r.data.summary.pages.find(p=>p.page==='/niti.html').views,2);
 // Period summaries must include visits beyond the 100-row visible list.
 const large=env();await call(large,`/api/admin/visits?from=${today}&to=${today}`,null,true);
