@@ -465,7 +465,8 @@ async function handle(request, env) {
         try {
           const id=crypto.randomUUID();
           if (!await insertBooking(env,date,time,{id,name,phone,...selected,source:"admin"})) return err("Този час вече е зает.",409);
-          const sms=await notifySms(env,"booked",{id,date,time,phone});
+          // Manual admin bookings do not send SMS or consume the SMS quota.
+          const sms={enabled:false,reason:"manual_admin_booking"};
           return json({ ok: true, sms });
         } catch {
           return err("\u0427\u0430\u0441\u044A\u0442 \u0435 \u0437\u0430\u0435\u0442", 409);

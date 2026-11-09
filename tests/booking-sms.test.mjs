@@ -42,8 +42,8 @@ try{
  e=configured();delete e.SMS_ADMIN_PHONE;r=await notifySms(e,'booked',booking);assert.equal(r.enabled,false);
  // Actual booking and cancellation routes must invoke SMS only after a successful mutation.
  calls=[];e=configured();globalThis.fetch=provider();const payload={date,time:'11:30',name:'Test',phone:'0888123456',serviceId:'hyperkeratosis',quantity:1,privacy:true};r=await call(e,'/api/book',payload);assert.equal(r.status,201);assert.equal(calls.length,2);const id=r.data.id;assert.equal((await call(e,'/api/book',payload)).status,409);assert.equal(calls.length,2);r=await call(e,'/api/admin/cancel',{id,reason:'Long private reason stays out of SMS'},true);assert.equal(r.status,200);assert.equal(calls.length,3);assert.equal(r.data.sms.client,'accepted');assert(calls.every(c=>!c.message.includes('private reason')));assert.equal((await call(e,'/api/admin/cancel',{id},true)).status,404);assert.equal(calls.length,3);
- calls=[];e=configured();r=await call(e,'/api/admin/book',payload,true);assert.equal(r.status,200);assert.equal(calls.length,2);
- r=await call(e,'/api/admin/sms-status',null,true);assert.equal(r.status,200);assert.equal(r.data.used,2);assert.equal(r.data.remaining,98);assert.equal((await call(e,'/api/admin/sms-status')).status,401);
+ calls=[];e=configured();r=await call(e,'/api/admin/book',payload,true);assert.equal(r.status,200);assert.equal(calls.length,0);assert.equal(r.data.sms.reason,'manual_admin_booking');assert.equal(e.DB.sql.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='dany_sms_log'").get().n,0);
+ r=await call(e,'/api/admin/sms-status',null,true);assert.equal(r.status,200);assert.equal(r.data.used,0);assert.equal(r.data.remaining,100);assert.equal((await call(e,'/api/admin/sms-status')).status,401);
  r=await call(e,'/api/schedule');assert.equal(r.data.smsEnabled,true);assert.equal(r.data.smsLimit,100);assert(!JSON.stringify(r.data).includes('test-account'));assert(!JSON.stringify(r.data).includes('897001475'));
 
  calls=[];e=configured();e.RESEND_API_KEY='test';e.MAIL_FROM='test@example.com';e.NOTIFY_EMAILS='admin@example.com';
