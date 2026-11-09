@@ -3,7 +3,7 @@ var __name = (target, value) => __defProp(target, "name", { value, configurable:
 // src/worker.js
 var TIMES = Array.from({length:15},(_,i)=>{const m=600+i*30;return String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0")});
 const SCHEDULE_VERSION = "service-duration-v1";
-const SERVICES = [{"id": "ingrown", "bg": "Впит нокът", "en": "Ingrown toenail", "durations": [30, 60]}, {"id": "onycholysis", "bg": "Онихолиза", "en": "Onycholysis", "durations": [30, 60]}, {"id": "thickened", "bg": "Удебелени и деформирани нокти", "en": "Thickened and deformed nails", "durations": [40, 80]}, {"id": "fungal", "bg": "Гъбични изменения по ноктите", "en": "Fungal nail changes", "durations": [40, 60]}, {"id": "hyperkeratosis", "bg": "Хиперкератоза", "en": "Hyperkeratosis", "durations": [30, 60]}, {"id": "niti", "bg": "Корекция с NiTi", "en": "NiTi nail correction", "durations": [30]}, {"id": "gel-polish", "bg": "Гел лак", "en": "Gel polish", "durations": [90]}, {"id": "natural-gel", "bg": "Гел върху естествен нокът", "en": "Gel on natural nails", "durations": [150]}, {"id": "extensions", "bg": "Изграждане с гел", "en": "Gel nail extensions", "durations": [165]}];
+const SERVICES = [{"id": "ingrown", "bg": "Впит нокът", "en": "Ingrown toenail", "durations": [30, 60]}, {"id": "onycholysis", "bg": "Онихолиза", "en": "Onycholysis", "durations": [30, 60]}, {"id": "thickened", "bg": "Удебелени и деформирани нокти", "en": "Thickened and deformed nails", "durations": [40, 80]}, {"id": "fungal", "bg": "Гъбични изменения по ноктите", "en": "Fungal nail changes", "durations": [40, 60]}, {"id": "hyperkeratosis", "bg": "Хиперкератоза", "en": "Hyperkeratosis", "durations": [30, 60]}, {"id": "niti", "bg": "Корекция с NiTi", "en": "NiTi nail correction", "durations": [30]}, {"id": "gel-polish", "bg": "Гел лак", "en": "Gel polish", "durations": [90]}, {"id": "natural-gel", "bg": "Гел върху естествен нокът", "en": "Gel on natural nails", "durations": [150]}, {"id": "extensions", "bg": "Изграждане с гел", "en": "Gel nail extensions", "durations": [165]}, {"id": "medical-pedicure", "bg": "Медицински педикюр", "en": "Medical pedicure", "durations": [90, 90], "variants": [{"bg": "Мъжки", "en": "Men’s", "price": 40}, {"bg": "Женски", "en": "Women’s", "price": 35}]}, {"id": "pedicure-gel-polish", "bg": "Педикюр с гел лак", "en": "Pedicure with gel polish", "durations": [90], "price": 30}];
 const LEGACY_TIMES = ["10:00","11:30","13:00","14:30","16:00","17:30"];
 const APPOINTMENT_MINUTES = 90;
 var json =  __name((v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } }), "json");
@@ -122,7 +122,7 @@ function selection(b) {
   }
   const item=SERVICES.find(s=>s.id===b.serviceId), quantity=Number(b.quantity ?? 1);
   if (!item || !Number.isInteger(quantity) || quantity<1 || quantity>item.durations.length) return null;
-  return {service:item.bg+(item.durations.length>1?` — ${quantity} бр.`:"")+(safe(b.notes,700)?" • "+safe(b.notes,700):""),duration:item.durations[quantity-1]};
+  return {service:item.bg+(item.variants?` — ${item.variants[quantity-1].bg} — ${item.variants[quantity-1].price} €`:item.price?` — ${item.price} €`:item.durations.length>1?` — ${quantity} бр.`:"")+(safe(b.notes,700)?" • "+safe(b.notes,700):""),duration:item.durations[quantity-1]};
 }
 function publicAvailability(rows,from,to) {
   const out=[];

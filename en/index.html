@@ -293,7 +293,7 @@ const bookingText={"pick": "Choose a service", "unit": "item(s)", "min": "min."}
 
 const choices=(date,time)=>availability.find(x=>x.date===date&&x.time===time)?.services||[];
 const isTaken=(date,time)=>variable?!choices(date,time).length:occupied.has(date+' '+time);
-const bookingPrices={ingrown:[20,40],onycholysis:[15,30],thickened:[20,40],fungal:[10,20],hyperkeratosis:[20,40],niti:[30],'gel-polish':[25],'natural-gel':['30–35'],extensions:[50]};
+const bookingPrices={ingrown:[20,40],onycholysis:[15,30],thickened:[20,40],fungal:[10,20],hyperkeratosis:[20,40],niti:[30],'gel-polish':[25],'natural-gel':['30–35'],extensions:[50],'medical-pedicure':[40,35],'pedicure-gel-polish':[30]};
 const priceText=(id,quantity=1)=>{const price=bookingPrices[id]?.[quantity-1];return price===undefined?'':String(price)+' €'};
 function serviceLabel(item,quantity=1){return item['en']+(priceText(item.id,quantity)?' — '+priceText(item.id,quantity):'')}
 function refreshPriceLabels(){const selected=$('bk-service').value,quantity=Number($('bk-quantity').value)||1;for(const option of $('bk-service').options){const item=catalog.find(s=>s.id===option.value);if(item)option.text=serviceLabel(item,option.value===selected?quantity:1)}}
@@ -304,8 +304,9 @@ function populateServices(preserve=false){
 }
 function populateQuantity(old='1'){
  const service=choices(state.date,state.time).find(s=>s.id===$('bk-service').value),el=$('bk-quantity');el.replaceChildren();
- if(service)for(const q of service.quantities)el.add(new Option(q.quantity+' '+bookingText.unit+' — '+q.duration+' '+bookingText.min+(priceText(service.id,q.quantity)?' — '+priceText(service.id,q.quantity):''),q.quantity));
+ if(service)for(const q of service.quantities)el.add(new Option((catalog.find(s=>s.id===service.id)?.variants?.[q.quantity-1]?.['en']||q.quantity+' '+bookingText.unit)+' — '+q.duration+' '+bookingText.min+(priceText(service.id,q.quantity)?' — '+priceText(service.id,q.quantity):''),q.quantity));
  if(Array.from(el.options).some(o=>o.value===String(old)))el.value=old;
+ const variantLabel=$('bk-quantity-label').firstChild;if(variantLabel?.nodeType===3)variantLabel.textContent=catalog.find(s=>s.id===$('bk-service').value)?.variants?'Variant ': 'Quantity ';
  $('bk-quantity-label').hidden=!(catalog.find(s=>s.id===$('bk-service').value)?.durations.length>1);updateSummary();
 }
 function validSelection(){return choices(state.date,state.time).find(s=>s.id===$('bk-service').value)?.quantities.find(q=>q.quantity===Number($('bk-quantity').value))}
