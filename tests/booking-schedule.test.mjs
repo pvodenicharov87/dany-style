@@ -66,7 +66,7 @@ console.log('PASS regression: admin hyperkeratosis11:30 stores forward30/60min; 
 
 const metadataEnv=env();await book(metadataEnv,'10:00','ingrown',1,false,{source:'admin',created_at:1});await book(metadataEnv,'12:00','ingrown',1,true,{source:'website',created_at:1});const metadataRows=(await adminCalendar(metadataEnv)).data.items;assert.equal(metadataRows[0].source,'website');assert.equal(metadataRows[1].source,'admin');assert(metadataRows.every(x=>x.created_at>1));const publicRows=await calendar(metadataEnv);assert(!JSON.stringify(publicRows.data).includes('created_at'));assert(!JSON.stringify(publicRows.data).includes('source'));console.log('PASS: server-owned creation timestamp/source, forged metadata ignored, admin-only visibility.');
 
-for(const [service,quantity,label]of [['medical-pedicure',1,'Мъжки — 40 €'],['medical-pedicure',2,'Женски — 35 €'],['pedicure-gel-polish',1,'30 €']]){
+for(const [service,quantity,label]of [['medical-pedicure',1,'мъже — 40 €'],['medical-pedicure-women',1,'жени — 35 €'],['natural-gel',1,'30 €'],['pedicure-gel-polish',1,'30 €']]){
  const test=env();assert.equal((await book(test,'10:00',service,quantity,false,{duration_minutes:1,price:1})).status,201);
  const row=(await adminCalendar(test)).data.items[0];assert.equal(row.duration_minutes,90);assert(row.service.includes(label));
  assert.equal((await book(test,'11:00')).status,409);assert.equal((await book(test,'11:30')).status,201);
