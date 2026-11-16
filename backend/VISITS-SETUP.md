@@ -39,3 +39,14 @@ On the first schedule/analytics request after this Worker is deployed, ensureAna
 Each visit/view/event ID is scoped server-side to its Europe/Sofia calendar date. Dates are taken from server receipt time, never client timezone or body.day. A continuing browser tab becomes a separate day segment after midnight; the visible page is counted for that new day on activity. Cumulative active time is rebased for a carried page, preventing the previous day's cumulative total leaking into today. Timing remains approximate: a partial heartbeat interval around midnight can be omitted. This does not create 10-minute sessions. Initial referring source remains the same in a carried visit.
 
 Today/yesterday/week/month use Sofia dates and inclusive calendar-day keys; no rolling 24-hour window. Preset admin reports refresh across midnight when open; manual date ranges remain fixed. DST 23- and 25-hour days are covered by tests. analytics-calendar-day.test.mjs verifies winter midnight, DST boundaries, source preservation, scoped IDs, reset-once/concurrency, future data retention and booking preservation. No production data was deleted by local tests.
+
+
+## Browser grouping v7 — 2026-11-16
+
+Deploy backend/worker-final.txt (identical to worker.js). /api/schedule advertises analyticsVisitorGroupingVersion:1. GitHub Pages publication does not deploy this independent Cloudflare Worker.
+
+The tracker keeps a random first-party browser UUID in localStorage for a fixed maximum of 30 days and sends it as visitorId alongside existing per-tab visit IDs. DNT/GPC are checked before storage. Clearing storage, changing browser or blocked storage can create separate visitors; these are browser groups, not verified people or IP-based groups. No raw IP, fingerprint, form values or booking identifiers are added.
+
+An additive site_visit_visitors table maps server-hashed browser codes to existing date-scoped visit IDs. No existing visit is merged or deleted. Legacy rows without a browser code remain separate. Keep ANALYTICS_RESET unchanged. Detailed rows/mappings expire with the existing 30-day retention.
+
+The authenticated report returns exact group counts for the selected Sofia calendar dates, independently of the latest-100 legacy list. At most 100 groups are displayed, with an explicit partial-list notice. Expand a group to load up to 1000 individual visits within that same selected period; higher totals are labeled. Individual visit details and Back behavior are preserved. UI falls back to the old list until the Worker capability is deployed. The public statistics disclosure widget is removed; the privacy policy is updated with the browser-code lifetime.

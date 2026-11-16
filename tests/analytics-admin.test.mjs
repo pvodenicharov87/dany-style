@@ -19,3 +19,12 @@ assert.equal(context.visitSource('www.google.bg'),'Google');assert.equal(context
 assert(html.includes('id="statsResults"'));assert(!html.includes('/api/admin/analytics?'));assert(!html.includes('Новото измерване отчита'));assert(!html.includes('Часова зона: България. Основният брояч'));
 assert.equal(readFileSync(new URL('../preview-mobile-admin-seo.html',import.meta.url),'utf8'),html);
 console.log('PASS: period list plus aggregate, per-entry table and four individual sections, unique page-name list and total active time, source labels, safe text rendering, separate detail screen, Back restores same list/scroll/focus, aggregate hidden inside visit, no explanatory paragraphs, identical mobile preview.');
+
+// Grouped reports: same-city browsers remain separate and expand lazily.
+let groupLoads=0;
+context.api=async path=>{if(path.includes('&visitor=')){groupLoads++;return {total:3,shown:3,items:[visits[0],{...visits[0],id:'three'},{...visits[0],id:'four'}]}}return {visitVersion:3,visits:4,shown:4,items:visits,groupedVisitors:2,visitorGroups:[{visitorKey:'browser-one',city:'Bierbeek',country:'BE',total:3},{visitorKey:'browser-two',city:'Bierbeek',country:'BE',total:1}]}};
+await context.loadVisits('2026-11-05','2026-11-05');
+const groupedList=box.children[1];assert.equal(groupedList.children.length,2);assert.equal(groupedList.children[0].children[0].textContent,'Bierbeek, BE — 3');assert.equal(groupedList.children[1].children[0].textContent,'Bierbeek, BE — 1');assert.equal(groupLoads,0);
+groupedList.children[0].open=true;await groupedList.children[0].ontoggle();assert.equal(groupLoads,1);assert.equal(groupedList.children[0].children[1].children.length,3);
+await groupedList.children[0].ontoggle();assert.equal(groupLoads,1);
+console.log('PASS: grouped browser rows, same city separated, period preserved, lazy member loading and no duplicate fetch.');

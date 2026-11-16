@@ -219,6 +219,8 @@ async function ensureVisits(db){
  if(!visitSchema.has(db))visitSchema.set(db,(async()=>{
  await db.prepare('CREATE TABLE IF NOT EXISTS site_visits (id TEXT PRIMARY KEY,day TEXT NOT NULL,started_at INTEGER NOT NULL,last_seen INTEGER NOT NULL,country TEXT NOT NULL,city TEXT NOT NULL,referrer TEXT NOT NULL)').run();
  await db.prepare('CREATE INDEX IF NOT EXISTS site_visits_day ON site_visits(day)').run();
+ await db.prepare('CREATE TABLE IF NOT EXISTS site_visit_visitors(visit_id TEXT PRIMARY KEY,visitor_key TEXT NOT NULL)').run();
+ await db.prepare('CREATE INDEX IF NOT EXISTS site_visit_visitors_browser ON site_visit_visitors(visitor_key)').run();
  await db.prepare('CREATE TABLE IF NOT EXISTS site_visit_daily (day TEXT PRIMARY KEY,total INTEGER NOT NULL)').run();
  await db.prepare('INSERT OR IGNORE INTO site_visit_daily(day,total) SELECT day,COUNT(*) FROM site_visits GROUP BY day').run();
  await db.prepare('CREATE TABLE IF NOT EXISTS site_visit_events (id TEXT PRIMARY KEY,visit_id TEXT NOT NULL,at INTEGER NOT NULL,event TEXT NOT NULL,page TEXT NOT NULL)').run();
@@ -270,11 +272,13 @@ async function recordLinkedVisit(env,body,geo,day){
  env.DB.prepare('UPDATE site_visit_pages SET active_ms=MAX(active_ms,MIN(MAX(0,?-(SELECT base_ms FROM site_visit_page_bases WHERE id=?)),MAX(0,?-opened_at))),last_seen=MAX(last_seen,?) WHERE id=? AND visit_id=? AND page=?').bind(body.activeMs,viewId,now,now,viewId,visitId,body.page)
  ];
  if(!['pageview','heartbeat'].includes(body.event))statements.push(env.DB.prepare('INSERT OR IGNORE INTO site_visit_events(id,visit_id,at,event,page) SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM site_visit_events WHERE visit_id=?)<500').bind(await analyticsScopedId('event',body.eventId,day),visitId,now,body.event,body.page,visitId));
+ if(visitUuid(body.visitorId))statements.push(env.DB.prepare('INSERT OR IGNORE INTO site_visit_visitors(visit_id,visitor_key) VALUES(?,?)').bind(visitId,await analyticsScopedId('browser',body.visitorId,'browser-v1')));
  await env.DB.batch(statements);
  await env.DB.prepare('DELETE FROM site_visit_pages WHERE last_seen<?').bind(now-30*864e5).run();
  await env.DB.prepare('DELETE FROM site_visit_page_bases WHERE NOT EXISTS (SELECT 1 FROM site_visit_pages WHERE site_visit_pages.id=site_visit_page_bases.id)').run();
  await env.DB.prepare('DELETE FROM site_visit_events WHERE at<?').bind(now-30*864e5).run();
- await env.DB.prepare('DELETE FROM site_visits WHERE last_seen<?').bind(now-30*864e5).run();return true;
+ await env.DB.prepare('DELETE FROM site_visits WHERE last_seen<?').bind(now-30*864e5).run();
+ await env.DB.prepare('DELETE FROM site_visit_visitors WHERE NOT EXISTS (SELECT 1 FROM site_visits WHERE site_visits.id=site_visit_visitors.visit_id)').run();return true;
 }
 async function visitPeriodSummary(db,from,to,total){
  const recorded=await db.prepare('SELECT COUNT(*) AS total FROM site_visits WHERE day BETWEEN ? AND ?').bind(from,to).first();
@@ -286,10 +290,24 @@ async function visitPeriodSummary(db,from,to,total){
 async function visitReport(url,env){
  const from=url.searchParams.get('from'),to=url.searchParams.get('to');if(!validDate(from)||!validDate(to)||from>to||Date.parse(to)-Date.parse(from)>366*864e5)return err('Изберете валиден период до 367 дни.');
  await ensureAnalyticsReady(env.DB);
+ const visitor=url.searchParams.get('visitor');
+ if(visitor){
+  if(!visitUuid(visitor))return err('Невалиден посетител.');
+  const filter=' FROM site_visits v LEFT JOIN site_visit_visitors m ON m.visit_id=v.id WHERE v.day BETWEEN ? AND ? AND COALESCE(m.visitor_key,v.id)=?';
+  const count=await env.DB.prepare('SELECT COUNT(*) AS total'+filter).bind(from,to,visitor).first();
+  const items=(await env.DB.prepare('SELECT v.*'+filter+' ORDER BY v.started_at DESC,v.id DESC LIMIT 1000').bind(from,to,visitor).all()).results;
+  return json({groupVersion:1,visitorKey:visitor,total:Number(count?.total||0),shown:items.length,items});
+ }
  const count=await env.DB.prepare('SELECT COALESCE(SUM(total),0) AS total FROM site_visit_daily WHERE day BETWEEN ? AND ?').bind(from,to).first();
  const visits=(await env.DB.prepare('SELECT v.*, (SELECT COUNT(*) FROM site_visit_events e WHERE e.visit_id=v.id AND e.event=\'pageview\') AS pageviews FROM site_visits v WHERE day BETWEEN ? AND ? ORDER BY started_at DESC LIMIT 100').bind(from,to).all()).results;
+ const visitorGroups=(await env.DB.prepare(`WITH ranked AS (
+ SELECT v.*,COALESCE(m.visitor_key,v.id) AS visitorKey,ROW_NUMBER() OVER(PARTITION BY COALESCE(m.visitor_key,v.id) ORDER BY v.started_at DESC,v.id DESC) AS rn
+ FROM site_visits v LEFT JOIN site_visit_visitors m ON m.visit_id=v.id WHERE v.day BETWEEN ? AND ?
+ ) SELECT visitorKey,COUNT(*) AS total,MIN(started_at) AS firstAt,MAX(started_at) AS lastAt,
+ MAX(CASE WHEN rn=1 THEN city END) AS city,MAX(CASE WHEN rn=1 THEN country END) AS country,COUNT(*) OVER() AS allGroups
+ FROM ranked GROUP BY visitorKey ORDER BY lastAt DESC,visitorKey LIMIT 100`).bind(from,to).all()).results;
  const summary=await visitPeriodSummary(env.DB,from,to,Number(count?.total||0));
- return json({summary,visitVersion:3,measurement:'tab-visits',visits:Number(count?.total||0),items:visits,shown:visits.length,retentionDays:30,inactivityMinutes:null,timeZone:'Europe/Sofia'});
+ return json({summary,groupVersion:1,visitorGroups,groupedVisitors:Number(visitorGroups[0]?.allGroups||0),visitVersion:3,measurement:'tab-visits',visits:Number(count?.total||0),items:visits,shown:visits.length,retentionDays:30,inactivityMinutes:null,timeZone:'Europe/Sofia'});
 }
 async function visitDetails(url,env){
  const id=url.searchParams.get('id');if(!/^[-a-f0-9]{36}$/.test(id||''))return err('Невалидно посещение.');await ensureAnalyticsReady(env.DB);
@@ -326,7 +344,7 @@ async function handle(request, env) {
   const url = new URL(request.url), path = url.pathname, method = request.method, ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (!env.DB) return err("\u041B\u0438\u043F\u0441\u0432\u0430 D1 \u0431\u0430\u0437\u0430 \u0434\u0430\u043D\u043D\u0438", 503);
   if(method==="POST"&&path==="/api/analytics/event")return collectAnalytics(request,env);
-  if (method === "GET" && path === "/api/schedule") {await ensureAnalyticsReady(env.DB);return json({...scheduleInfo,smsVersion:3,analyticsVisitVersion:6,analyticsDayTimeZone:"Europe/Sofia",analyticsReset:ANALYTICS_RESET,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});}
+  if (method === "GET" && path === "/api/schedule") {await ensureAnalyticsReady(env.DB);return json({...scheduleInfo,smsVersion:3,analyticsVisitVersion:7,analyticsVisitorGroupingVersion:1,analyticsDayTimeZone:"Europe/Sofia",analyticsReset:ANALYTICS_RESET,smsEnabled:smsConfigured(env),smsLimit:smsLimit(env)});}
   if (method === "GET" && path === "/api/calendar") {
     await ensureScheduleSchema(env.DB);
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");
